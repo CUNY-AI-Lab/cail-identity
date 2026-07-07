@@ -17,6 +17,11 @@ const ISS = "https://tools.ailab.gc.cuny.edu/cail-sso";
 const STAGING_ISS = "https://tools.cuny.qzz.io/cail-sso";
 const AUD = "cail-internal";
 
+// Default allowlist for the bulk of the suite (I8): both issuers listed, so
+// canonical- and staging-iss happy-path tokens are accepted. Vectors that
+// probe the allowlist itself pass their own `allowedIssuers` explicitly.
+const DEFAULT_ALLOW = [ISS, STAGING_ISS];
+
 /** Base claim set that PASSES at now=NOW with default tolerance. */
 function baseClaims(over: Record<string, unknown> = {}) {
   return {
@@ -36,14 +41,24 @@ async function checkAgainstReference(
   token: string,
   secret: string,
   sigValid: boolean,
-  opts?: { now?: number; clockToleranceSeconds?: number },
+  opts?: {
+    now?: number;
+    clockToleranceSeconds?: number;
+    allowedIssuers?: string[];
+  },
 ) {
   const now = opts?.now ?? NOW;
   const tol =
     opts?.clockToleranceSeconds ??
     (opts && "clockToleranceSeconds" in opts ? 0 : 60);
-  const ref = referenceAccept(token, sigValid, now, tol);
-  const got = await verifyIdentityJwt(token, secret, { now, ...opts });
+  const allow =
+    opts && "allowedIssuers" in opts ? opts.allowedIssuers! : DEFAULT_ALLOW;
+  const ref = referenceAccept(token, sigValid, now, tol, allow);
+  const got = await verifyIdentityJwt(token, secret, {
+    now,
+    allowedIssuers: allow,
+    ...opts,
+  });
   if (ref.accept) {
     expect(got, "impl rejected a token the reference accepted").not.toBeNull();
     expect(got).toEqual(ref.identity);
@@ -86,9 +101,42 @@ describe("happy path", () => {
     });
   });
 
-  it("V3 staging iss (qzz.io) -> accept (I8 suffix)", async () => {
+  it("V3 staging iss + allowlist=[canonical, staging] -> accept (I8 exact, listed)", async () => {
     const t = await mintWithJose(baseClaims({ iss: STAGING_ISS }));
-    const got = await checkAgainstReference(t, SECRET, true);
+    const got = await checkAgainstReference(t, SECRET, true, {
+      allowedIssuers: [ISS, STAGING_ISS],
+    });
+    expect(got?.subject).toBe("cail-subject-abc");
+  });
+
+  it("V3b staging iss + allowlist=[canonical] only -> null (accepted only when listed)", async () => {
+    const t = await mintWithJose(baseClaims({ iss: STAGING_ISS }));
+    expect(
+      await verifyIdentityJwt(t, SECRET, { now: NOW, allowedIssuers: [ISS] }),
+    ).toBeNull();
+    await checkAgainstReference(t, SECRET, true, { allowedIssuers: [ISS] });
+  });
+
+  it("V3c canonical iss + allowlist absent -> null (fail closed, loud)", async () => {
+    const t = await mintWithJose(baseClaims()); // canonical iss
+    // No allowedIssuers at all: must reject even a canonical-iss valid token.
+    expect(await verifyIdentityJwt(t, SECRET, { now: NOW })).toBeNull();
+    await checkAgainstReference(t, SECRET, true, { allowedIssuers: [] });
+  });
+
+  it("V3c' canonical iss + allowlist=[] -> null (fail closed on empty)", async () => {
+    const t = await mintWithJose(baseClaims());
+    expect(
+      await verifyIdentityJwt(t, SECRET, { now: NOW, allowedIssuers: [] }),
+    ).toBeNull();
+    await checkAgainstReference(t, SECRET, true, { allowedIssuers: [] });
+  });
+
+  it("V3d canonical iss + allowlist=[canonical] -> accept (happy path, exact)", async () => {
+    const t = await mintWithJose(baseClaims());
+    const got = await checkAgainstReference(t, SECRET, true, {
+      allowedIssuers: [ISS],
+    });
     expect(got?.subject).toBe("cail-subject-abc");
   });
 
@@ -129,7 +177,7 @@ describe("reject: structure & crypto", () => {
     const full = await mintWithJose(baseClaims());
     const [, p, s] = full.split(".");
     const t = `not*base64url!.${p}.${s}`;
-    expect(await verifyIdentityJwt(t, SECRET, { now: NOW })).toBeNull();
+    expect(await verifyIdentityJwt(t, SECRET, { now: NOW, allowedIssuers: DEFAULT_ALLOW })).toBeNull();
     await checkAgainstReference(t, SECRET, false);
   });
 
@@ -164,13 +212,13 @@ describe("reject: structure & crypto", () => {
     // A correctly HS256-pinned verifier rejects at I4. The impl's HS256 check
     // would also fail (different digest), so sigValid=false either way.
     const t = await mintHmacAlg("HS384", baseClaims());
-    expect(await verifyIdentityJwt(t, SECRET, { now: NOW })).toBeNull();
+    expect(await verifyIdentityJwt(t, SECRET, { now: NOW, allowedIssuers: DEFAULT_ALLOW })).toBeNull();
     await checkAgainstReference(t, SECRET, false);
   });
 
   it("V10b alg=HS512 VALIDLY signed with real secret (I4 alg-agility) -> null", async () => {
     const t = await mintHmacAlg("HS512", baseClaims());
-    expect(await verifyIdentityJwt(t, SECRET, { now: NOW })).toBeNull();
+    expect(await verifyIdentityJwt(t, SECRET, { now: NOW, allowedIssuers: DEFAULT_ALLOW })).toBeNull();
     await checkAgainstReference(t, SECRET, false);
   });
 
@@ -191,14 +239,14 @@ describe("reject: structure & crypto", () => {
   it("V11a alg='HS384' header but valid SHA-256 sig (I4 pin isolated) -> null", async () => {
     const t = await signWithHeaderAlg(baseClaims(), "HS384", "SHA-256");
     // Sanity: the SHA-256 signature genuinely verifies (I5 would pass).
-    expect(await verifyIdentityJwt(t, SECRET, { now: NOW })).toBeNull();
+    expect(await verifyIdentityJwt(t, SECRET, { now: NOW, allowedIssuers: DEFAULT_ALLOW })).toBeNull();
     // Reference reader: sigValid=true (SHA-256 sig is valid) -> must reject at I4.
     await checkAgainstReference(t, SECRET, true);
   });
 
   it("V11b alg='none' header but valid SHA-256 sig (I4 pin isolated) -> null", async () => {
     const t = await signWithHeaderAlg(baseClaims(), "none", "SHA-256");
-    expect(await verifyIdentityJwt(t, SECRET, { now: NOW })).toBeNull();
+    expect(await verifyIdentityJwt(t, SECRET, { now: NOW, allowedIssuers: DEFAULT_ALLOW })).toBeNull();
     await checkAgainstReference(t, SECRET, true);
   });
 
@@ -249,18 +297,30 @@ describe("reject: claims", () => {
     await checkAgainstReference(t, SECRET, true);
   });
 
-  it("V19 iss suffix-not-substring: evil…/cail-sso-not (I8) -> null", async () => {
+  it("V19 iss 'https://evil.example/cail-sso-not' + allowlist=[canonical] -> null", async () => {
     const t = await mintWithJose(
       baseClaims({ iss: "https://evil.example/cail-sso-not" }),
     );
-    await checkAgainstReference(t, SECRET, true);
+    await checkAgainstReference(t, SECRET, true, { allowedIssuers: [ISS] });
   });
 
-  it("V19b iss contains cail-sso mid-string (substring, not suffix) -> null", async () => {
+  // Codex-#3 REGRESSION VECTOR: this iss PASSES the old `endsWith("/cail-sso")`
+  // suffix check but is NOT an allowlisted issuer. Exact allowlist must reject.
+  it("V19b iss 'https://evil.example/cail-sso' (passes old suffix) + allowlist=[canonical] -> null", async () => {
+    const t = await mintWithJose(
+      baseClaims({ iss: "https://evil.example/cail-sso" }),
+    );
+    expect(
+      await verifyIdentityJwt(t, SECRET, { now: NOW, allowedIssuers: [ISS] }),
+    ).toBeNull();
+    await checkAgainstReference(t, SECRET, true, { allowedIssuers: [ISS] });
+  });
+
+  it("V19c iss 'https://evil.example/cail-sso/extra' substring + allowlist=[canonical] -> null", async () => {
     const t = await mintWithJose(
       baseClaims({ iss: "https://evil.example/cail-sso/extra" }),
     );
-    await checkAgainstReference(t, SECRET, true);
+    await checkAgainstReference(t, SECRET, true, { allowedIssuers: [ISS] });
   });
 
   it("V20a iss missing (I8) -> null", async () => {
@@ -311,33 +371,33 @@ describe("clock tolerance (exp) default 60", () => {
 
   it("V15b exp == now-59 -> accept", async () => {
     const t = await mintWithJose(baseClaims({ exp: NOW - 59 }));
-    const got = await verifyIdentityJwt(t, SECRET, { now: NOW });
+    const got = await verifyIdentityJwt(t, SECRET, { now: NOW, allowedIssuers: DEFAULT_ALLOW });
     expect(got).not.toBeNull();
     await checkAgainstReference(t, SECRET, true, { now: NOW });
   });
 
   it("V15c exp == now-60 -> null (tol boundary)", async () => {
     const t = await mintWithJose(baseClaims({ exp: NOW - 60 }));
-    expect(await verifyIdentityJwt(t, SECRET, { now: NOW })).toBeNull();
+    expect(await verifyIdentityJwt(t, SECRET, { now: NOW, allowedIssuers: DEFAULT_ALLOW })).toBeNull();
     await checkAgainstReference(t, SECRET, true, { now: NOW });
   });
 
   it("V15d exp == now-3600 -> null", async () => {
     const t = await mintWithJose(baseClaims({ exp: NOW - 3600 }));
-    expect(await verifyIdentityJwt(t, SECRET, { now: NOW })).toBeNull();
+    expect(await verifyIdentityJwt(t, SECRET, { now: NOW, allowedIssuers: DEFAULT_ALLOW })).toBeNull();
     await checkAgainstReference(t, SECRET, true, { now: NOW });
   });
 
   it("V16 exp == now+300 -> accept", async () => {
     const t = await mintWithJose(baseClaims({ exp: NOW + 300 }));
-    const got = await verifyIdentityJwt(t, SECRET, { now: NOW });
+    const got = await verifyIdentityJwt(t, SECRET, { now: NOW, allowedIssuers: DEFAULT_ALLOW });
     expect(got).not.toBeNull();
   });
 
   it("V15e strict {tol:0} + exp == now -> null", async () => {
     const t = await mintWithJose(baseClaims({ exp: NOW }));
     expect(
-      await verifyIdentityJwt(t, SECRET, { now: NOW, clockToleranceSeconds: 0 }),
+      await verifyIdentityJwt(t, SECRET, { now: NOW, clockToleranceSeconds: 0, allowedIssuers: DEFAULT_ALLOW }),
     ).toBeNull();
     await checkAgainstReference(t, SECRET, true, {
       now: NOW,
@@ -348,7 +408,7 @@ describe("clock tolerance (exp) default 60", () => {
   it("V15e' strict {tol:0} + exp == now+1 -> accept", async () => {
     const t = await mintWithJose(baseClaims({ exp: NOW + 1 }));
     expect(
-      await verifyIdentityJwt(t, SECRET, { now: NOW, clockToleranceSeconds: 0 }),
+      await verifyIdentityJwt(t, SECRET, { now: NOW, clockToleranceSeconds: 0, allowedIssuers: DEFAULT_ALLOW }),
     ).not.toBeNull();
   });
 });
@@ -356,34 +416,34 @@ describe("clock tolerance (exp) default 60", () => {
 describe("clock tolerance (nbf) default 60", () => {
   it("V21a nbf == now+60 -> accept (within tol)", async () => {
     const t = await mintWithJose(baseClaims({ nbf: NOW + 60 }));
-    const got = await verifyIdentityJwt(t, SECRET, { now: NOW });
+    const got = await verifyIdentityJwt(t, SECRET, { now: NOW, allowedIssuers: DEFAULT_ALLOW });
     expect(got).not.toBeNull();
     await checkAgainstReference(t, SECRET, true, { now: NOW });
   });
 
   it("V21b nbf == now+61 -> null", async () => {
     const t = await mintWithJose(baseClaims({ nbf: NOW + 61 }));
-    expect(await verifyIdentityJwt(t, SECRET, { now: NOW })).toBeNull();
+    expect(await verifyIdentityJwt(t, SECRET, { now: NOW, allowedIssuers: DEFAULT_ALLOW })).toBeNull();
     await checkAgainstReference(t, SECRET, true, { now: NOW });
   });
 
   it("V21c nbf == now-100 -> accept", async () => {
     const t = await mintWithJose(baseClaims({ nbf: NOW - 100 }));
-    const got = await verifyIdentityJwt(t, SECRET, { now: NOW });
+    const got = await verifyIdentityJwt(t, SECRET, { now: NOW, allowedIssuers: DEFAULT_ALLOW });
     expect(got).not.toBeNull();
   });
 
   it("V21d strict {tol:0} + nbf == now -> accept", async () => {
     const t = await mintWithJose(baseClaims({ nbf: NOW }));
     expect(
-      await verifyIdentityJwt(t, SECRET, { now: NOW, clockToleranceSeconds: 0 }),
+      await verifyIdentityJwt(t, SECRET, { now: NOW, clockToleranceSeconds: 0, allowedIssuers: DEFAULT_ALLOW }),
     ).not.toBeNull();
   });
 
   it("V21d' strict {tol:0} + nbf == now+1 -> null", async () => {
     const t = await mintWithJose(baseClaims({ nbf: NOW + 1 }));
     expect(
-      await verifyIdentityJwt(t, SECRET, { now: NOW, clockToleranceSeconds: 0 }),
+      await verifyIdentityJwt(t, SECRET, { now: NOW, clockToleranceSeconds: 0, allowedIssuers: DEFAULT_ALLOW }),
     ).toBeNull();
   });
 });
@@ -397,19 +457,19 @@ describe("output hygiene", () => {
     const t = await mintWithJose(
       baseClaims({ entitlements: ["a", 1, null, "b", { x: 1 }, true] }),
     );
-    const got = await verifyIdentityJwt(t, SECRET, { now: NOW });
+    const got = await verifyIdentityJwt(t, SECRET, { now: NOW, allowedIssuers: DEFAULT_ALLOW });
     expect(got?.entitlements).toEqual(["a", "b"]);
   });
 
   it("V25b entitlements not an array -> []", async () => {
     const t = await mintWithJose(baseClaims({ entitlements: "a,b" }));
-    const got = await verifyIdentityJwt(t, SECRET, { now: NOW });
+    const got = await verifyIdentityJwt(t, SECRET, { now: NOW, allowedIssuers: DEFAULT_ALLOW });
     expect(got?.entitlements).toEqual([]);
   });
 
   it("V26 email/name non-string -> undefined", async () => {
     const t = await mintWithJose(baseClaims({ email: 123, name: { x: 1 } }));
-    const got = await verifyIdentityJwt(t, SECRET, { now: NOW });
+    const got = await verifyIdentityJwt(t, SECRET, { now: NOW, allowedIssuers: DEFAULT_ALLOW });
     expect(got?.email).toBeUndefined();
     expect(got?.name).toBeUndefined();
   });
@@ -434,7 +494,7 @@ describe("robustness", () => {
   it("V27 never throws on malformed inputs", async () => {
     for (const [label, tok] of malformed) {
       await expect(
-        verifyIdentityJwt(tok, SECRET, { now: NOW }),
+        verifyIdentityJwt(tok, SECRET, { now: NOW, allowedIssuers: DEFAULT_ALLOW }),
         `threw on: ${label}`,
       ).resolves.toBeNull();
     }
@@ -449,7 +509,7 @@ describe("robustness", () => {
     ];
     for (const g of garbage) {
       await expect(
-        verifyIdentityJwt(g, SECRET, { now: NOW }),
+        verifyIdentityJwt(g, SECRET, { now: NOW, allowedIssuers: DEFAULT_ALLOW }),
       ).resolves.toBeNull();
     }
   });
@@ -457,10 +517,10 @@ describe("robustness", () => {
   it("V27c never throws on non-string token/secret (defensive)", async () => {
     // Cast through unknown to simulate a misbehaving caller.
     await expect(
-      verifyIdentityJwt(null as unknown as string, SECRET, { now: NOW }),
+      verifyIdentityJwt(null as unknown as string, SECRET, { now: NOW, allowedIssuers: DEFAULT_ALLOW }),
     ).resolves.toBeNull();
     await expect(
-      verifyIdentityJwt("a.b.c", null as unknown as string, { now: NOW }),
+      verifyIdentityJwt("a.b.c", null as unknown as string, { now: NOW, allowedIssuers: DEFAULT_ALLOW }),
     ).resolves.toBeNull();
   });
 
@@ -469,25 +529,30 @@ describe("robustness", () => {
     const snapshot = JSON.parse(JSON.stringify(claims));
     const t = await mintWithJose(claims);
     const tokenCopy = `${t}`;
-    await verifyIdentityJwt(t, SECRET, { now: NOW });
+    await verifyIdentityJwt(t, SECRET, { now: NOW, allowedIssuers: DEFAULT_ALLOW });
     expect(claims).toEqual(snapshot); // caller's object untouched
     expect(t).toBe(tokenCopy); // string identity unchanged
   });
 
   it("V29 injected now respected: accept at now, reject after ttl", async () => {
     const t = await mintWithJose(baseClaims({ exp: NOW + 100 }));
-    expect(await verifyIdentityJwt(t, SECRET, { now: NOW })).not.toBeNull();
+    expect(await verifyIdentityJwt(t, SECRET, { now: NOW, allowedIssuers: DEFAULT_ALLOW })).not.toBeNull();
     // Push now well past exp + tol.
     expect(
-      await verifyIdentityJwt(t, SECRET, { now: NOW + 100 + 61 }),
+      await verifyIdentityJwt(t, SECRET, { now: NOW + 100 + 61, allowedIssuers: DEFAULT_ALLOW }),
     ).toBeNull();
   });
 
-  it("V29b default now (no opts) accepts a fresh token, rejects an expired one", async () => {
+  it("V29b default now (real clock) accepts fresh, rejects expired", async () => {
+    // `now` omitted -> impl uses Date.now(); allowlist still required (I8).
     const nowReal = Math.floor(Date.now() / 1000);
     const fresh = await mintWithJose(baseClaims({ exp: nowReal + 3600 }));
     const stale = await mintWithJose(baseClaims({ exp: nowReal - 3600 }));
-    expect(await verifyIdentityJwt(fresh, SECRET)).not.toBeNull();
-    expect(await verifyIdentityJwt(stale, SECRET)).toBeNull();
+    expect(
+      await verifyIdentityJwt(fresh, SECRET, { allowedIssuers: DEFAULT_ALLOW }),
+    ).not.toBeNull();
+    expect(
+      await verifyIdentityJwt(stale, SECRET, { allowedIssuers: DEFAULT_ALLOW }),
+    ).toBeNull();
   });
 });

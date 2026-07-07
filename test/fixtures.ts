@@ -159,6 +159,7 @@ export function referenceAccept(
   sigValid: boolean,
   now: number,
   tol: number,
+  allowedIssuers: string[],
 ): RefResult {
   const parts = token.split(".");
   if (parts.length !== 3) return { accept: false }; // I1
@@ -176,8 +177,8 @@ export function referenceAccept(
   const { exp, aud, iss, nbf, sub } = payload;
   if (typeof exp !== "number" || exp <= now - tol) return { accept: false }; // I6
   if (aud !== "cail-internal") return { accept: false }; // I7
-  if (typeof iss !== "string" || !iss.endsWith("/cail-sso"))
-    return { accept: false }; // I8
+  if (typeof iss !== "string" || !allowedIssuers.includes(iss))
+    return { accept: false }; // I8 — exact allowlist, fail closed if empty
   if (nbf !== undefined) {
     if (typeof nbf !== "number" || nbf > now + tol) return { accept: false }; // I9
   }

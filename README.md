@@ -29,9 +29,16 @@ npm install @cuny-ai-lab/cail-identity
 ## Usage
 
 ```ts
-import { verifyIdentityJwt, type CailIdentity } from "@cuny-ai-lab/cail-identity";
+import {
+  verifyIdentityJwt,
+  CAIL_CANONICAL_ISSUER,
+  type CailIdentity,
+} from "@cuny-ai-lab/cail-identity";
 
-const identity = await verifyIdentityJwt(token, env.CAIL_IDENTITY_JWT_SECRET);
+const identity = await verifyIdentityJwt(token, env.CAIL_IDENTITY_JWT_SECRET, {
+  // REQUIRED to accept anything — an unconfigured allowlist rejects all tokens.
+  allowedIssuers: [CAIL_CANONICAL_ISSUER],
+});
 if (!identity) {
   // fail closed — 401. Never inspect WHY: there is no failure-reason oracle.
   return new Response("Unauthorized", { status: 401 });
@@ -46,7 +53,11 @@ if (!identity) {
 verifyIdentityJwt(
   token: string,
   secret: string,
-  opts?: { now?: number; clockToleranceSeconds?: number },
+  opts?: {
+    now?: number;
+    clockToleranceSeconds?: number;
+    allowedIssuers?: string[];
+  },
 ): Promise<CailIdentity | null>
 
 type CailIdentity = {
@@ -55,6 +66,10 @@ type CailIdentity = {
   name?: string;
   entitlements: string[];
 };
+
+// Convenience constants for composing your allowlist:
+export const CAIL_CANONICAL_ISSUER = "https://tools.ailab.gc.cuny.edu/cail-sso";
+export const CAIL_STAGING_ISSUER = "https://tools.cuny.qzz.io/cail-sso";
 ```
 
 - `secret` is a **function argument** — never stored, never logged. The package
@@ -63,6 +78,11 @@ type CailIdentity = {
 - `now` defaults to `Math.floor(Date.now() / 1000)`; inject a fixed clock in
   tests or deterministic consumers.
 - `clockToleranceSeconds` defaults to **60**. See the clock-tolerance note below.
+- `allowedIssuers` is an **exact-match** issuer allowlist (I8). It is **required
+  to accept anything**: absent or empty rejects every token (fail closed).
+  Compose it from the exported constants — accept prod only:
+  `{ allowedIssuers: [CAIL_CANONICAL_ISSUER] }`; accept prod + staging:
+  `{ allowedIssuers: [CAIL_CANONICAL_ISSUER, CAIL_STAGING_ISSUER] }`.
 
 ## The contract (10 invariants)
 
@@ -78,7 +98,7 @@ which check failed.
 | I5 | **Signature** | `HMAC-SHA256("<headerB64>.<payloadB64>", secret) !== signature` (constant-time via `crypto.subtle.verify`) |
 | I6 | **exp required** | `typeof exp !== "number"` OR `exp <= now - tol` |
 | I7 | **aud** | `aud !== "cail-internal"` (exact) |
-| I8 | **iss suffix** | `typeof iss !== "string"` OR NOT `iss.endsWith("/cail-sso")` — **suffix match**, not exact and not substring, so it blesses staging issuers like `https://tools.cuny.qzz.io/cail-sso`. Do **not** tighten this to a canonical origin. |
+| I8 | **iss exact allowlist** | `typeof iss !== "string"` OR `iss` is not an exact member of `opts.allowedIssuers` — **exact match against a configured set**, not suffix and not substring. Absent/empty `allowedIssuers` rejects ALL tokens (fail closed). Staging is accepted only by being *listed*. (Supersedes the old `endsWith("/cail-sso")`, which accepted `https://evil.example/cail-sso`.) |
 | I9 | **nbf if present** | `nbf` present AND (`typeof nbf !== "number"` OR `nbf > now + tol`). Absent `nbf` is allowed. |
 | I10 | **sub** | `typeof sub !== "string"` OR `sub === ""` |
 
@@ -87,10 +107,11 @@ through only if they are strings, else `undefined`; `entitlements` is the array
 filtered to strings, defaulting to `[]`. Unknown claims are dropped. The input
 is never mutated.
 
-**Invariants that are the whole point:** fail closed on any ambiguity; no
-algorithm agility (HS256 pinned in code); suffix `iss` / exact `aud` is the one
-intentional asymmetry (load-bearing for staging); verify-only — identity comes
-only from a validly-signed token, never from `X-CAIL-*` headers.
+**Invariants that are the whole point:** fail closed on any ambiguity (including
+an unconfigured issuer allowlist); no algorithm agility (HS256 pinned in code);
+exact-match `iss` and `aud` — trust only the issuers you explicitly list;
+verify-only — identity comes only from a validly-signed token, never from
+`X-CAIL-*` headers.
 
 ## Clock tolerance
 

@@ -31,7 +31,20 @@ export interface VerifyOptions {
    * 0 = strict RFC boundary (`exp <= now` rejects, `nbf > now` rejects).
    */
   clockToleranceSeconds?: number;
+  /**
+   * EXACT-match issuer allowlist (I8). A token is accepted only when its `iss`
+   * claim is an exact member of this array — NOT a suffix or substring match.
+   * Absent or empty → reject ALL tokens (fail closed, loud): the caller must
+   * opt into every issuer it trusts. Compose from `CAIL_CANONICAL_ISSUER` /
+   * `CAIL_STAGING_ISSUER` or supply your own.
+   */
+  allowedIssuers?: string[];
 }
+
+/** Canonical production issuer — list it in `allowedIssuers` to accept prod. */
+export const CAIL_CANONICAL_ISSUER = "https://tools.ailab.gc.cuny.edu/cail-sso";
+/** Staging issuer — list it in `allowedIssuers` to accept staging. */
+export const CAIL_STAGING_ISSUER = "https://tools.cuny.qzz.io/cail-sso";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -141,8 +154,11 @@ export async function verifyIdentityJwt(
   // I7 — aud exact.
   if (aud !== "cail-internal") return null;
 
-  // I8 — iss suffix match (NOT exact, NOT substring). Blesses staging issuers.
-  if (typeof iss !== "string" || !iss.endsWith("/cail-sso")) return null;
+  // I8 — iss EXACT-match against a configured allowlist (NOT suffix, NOT
+  // substring). Absent/empty allowlist rejects ALL tokens (fail closed).
+  const allowedIssuers =
+    opts && Array.isArray(opts.allowedIssuers) ? opts.allowedIssuers : [];
+  if (typeof iss !== "string" || !allowedIssuers.includes(iss)) return null;
 
   // I9 — nbf: if present, must be a number and not in the future past tol.
   if (nbf !== undefined) {
