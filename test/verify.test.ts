@@ -6,6 +6,7 @@ import {
   NOW,
   mintWithJose,
   mintHmacAlg,
+  signWithHeaderAlg,
   craftUnsigned,
   tamperPayloadByte,
   b64urlStr,
@@ -180,6 +181,31 @@ describe("reject: structure & crypto", () => {
       "A".repeat(342),
     );
     await checkAgainstReference(t, SECRET, false);
+  });
+
+  // -- I4 ISOLATION: header alg mismatch but a genuinely-VALID HMAC-SHA256 sig.
+  // These are the vectors with teeth for the alg PIN itself: the SHA-256
+  // signature verifies (I5 passes), so acceptance is gated ONLY by I4. Remove
+  // the alg check (keeping the hardcoded SHA-256 verify) and these FLIP to
+  // accepted. V9/V10/V11 above cannot catch that — their signatures fail I5.
+  it("V11a alg='HS384' header but valid SHA-256 sig (I4 pin isolated) -> null", async () => {
+    const t = await signWithHeaderAlg(baseClaims(), "HS384", "SHA-256");
+    // Sanity: the SHA-256 signature genuinely verifies (I5 would pass).
+    expect(await verifyIdentityJwt(t, SECRET, { now: NOW })).toBeNull();
+    // Reference reader: sigValid=true (SHA-256 sig is valid) -> must reject at I4.
+    await checkAgainstReference(t, SECRET, true);
+  });
+
+  it("V11b alg='none' header but valid SHA-256 sig (I4 pin isolated) -> null", async () => {
+    const t = await signWithHeaderAlg(baseClaims(), "none", "SHA-256");
+    expect(await verifyIdentityJwt(t, SECRET, { now: NOW })).toBeNull();
+    await checkAgainstReference(t, SECRET, true);
+  });
+
+  it("V11c control: alg='HS256' header + valid SHA-256 sig -> accept (proves V11a/b reject on alg, not sig)", async () => {
+    const t = await signWithHeaderAlg(baseClaims(), "HS256", "SHA-256");
+    const got = await checkAgainstReference(t, SECRET, true);
+    expect(got?.subject).toBe("cail-subject-abc");
   });
 
   it("V12 valid claims signed with WRONG secret (I5) -> null", async () => {

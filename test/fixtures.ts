@@ -50,6 +50,41 @@ export function b64urlStr(s: string): string {
   return base64url.encode(enc.encode(s));
 }
 
+/**
+ * Mint a token whose HEADER stamps an arbitrary `alg` label but whose SIGNATURE
+ * is a genuinely-VALID HMAC over the chosen `hmacHash` (default SHA-256) using
+ * the real secret. This DECOUPLES the header alg label from the actual hash.
+ *
+ * This is the vector that isolates I4: with `headerAlg:"HS384"` and
+ * `hmacHash:"SHA-256"`, the SHA-256 signature verifies (I5 passes), so the ONLY
+ * thing standing between this token and acceptance is the I4 alg pin. Remove I4
+ * and the token flips to accepted. jose's SignJWT ties header.alg to the hash,
+ * so we sign the signing-input directly with Web Crypto instead.
+ */
+export async function signWithHeaderAlg(
+  claims: Record<string, unknown>,
+  headerAlg: string,
+  hmacHash: "SHA-256" | "SHA-384" | "SHA-512" = "SHA-256",
+  secret: string = SECRET,
+): Promise<string> {
+  const headerB64 = base64url.encode(
+    enc.encode(JSON.stringify({ alg: headerAlg, typ: "JWT" })),
+  );
+  const payloadB64 = base64url.encode(enc.encode(JSON.stringify(claims)));
+  const signingInput = `${headerB64}.${payloadB64}`;
+  const key = await crypto.subtle.importKey(
+    "raw",
+    keyOf(secret),
+    { name: "HMAC", hash: hmacHash },
+    false,
+    ["sign"],
+  );
+  const sig = new Uint8Array(
+    await crypto.subtle.sign("HMAC", key, enc.encode(signingInput)),
+  );
+  return `${signingInput}.${base64url.encode(sig)}`;
+}
+
 /** Hand-craft a token with an arbitrary header object, valid-looking payload,
  * and a bogus (non-verifying) signature. Used for alg-confusion fixtures where
  * the signature must NOT verify anyway (I4 rejects before I5, but we still want
