@@ -85,6 +85,29 @@ export async function signWithHeaderAlg(
   return `${signingInput}.${base64url.encode(sig)}`;
 }
 
+/** Mint a valid HS256 token with a literal payload JSON string. */
+export async function signRawPayload(
+  payloadJson: string,
+  secret: string = SECRET,
+): Promise<string> {
+  const headerB64 = base64url.encode(
+    enc.encode(JSON.stringify({ alg: "HS256", typ: "JWT" })),
+  );
+  const payloadB64 = base64url.encode(enc.encode(payloadJson));
+  const signingInput = `${headerB64}.${payloadB64}`;
+  const key = await crypto.subtle.importKey(
+    "raw",
+    keyOf(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const sig = new Uint8Array(
+    await crypto.subtle.sign("HMAC", key, enc.encode(signingInput)),
+  );
+  return `${signingInput}.${base64url.encode(sig)}`;
+}
+
 /** Hand-craft a token with an arbitrary header object, valid-looking payload,
  * and a bogus (non-verifying) signature. Used for alg-confusion fixtures where
  * the signature must NOT verify anyway (I4 rejects before I5, but we still want
@@ -148,6 +171,10 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
+function isFiniteNumber(v: unknown): v is number {
+  return typeof v === "number" && Number.isFinite(v);
+}
+
 /**
  * Recompute the expected result from the RAW token + rules, independently of
  * the impl. `sigValid` is supplied by the caller because signature checking
@@ -161,6 +188,9 @@ export function referenceAccept(
   tol: number,
   allowedIssuers: string[],
 ): RefResult {
+  if (!Number.isFinite(now) || !Number.isFinite(tol))
+    return { accept: false };
+
   const parts = token.split(".");
   if (parts.length !== 3) return { accept: false }; // I1
   const [h, p] = parts;
@@ -175,12 +205,12 @@ export function referenceAccept(
   if (!sigValid) return { accept: false }; // I5
 
   const { exp, aud, iss, nbf, sub } = payload;
-  if (typeof exp !== "number" || exp <= now - tol) return { accept: false }; // I6
+  if (!isFiniteNumber(exp) || exp <= now - tol) return { accept: false }; // I6
   if (aud !== "cail-internal") return { accept: false }; // I7
   if (typeof iss !== "string" || !allowedIssuers.includes(iss))
     return { accept: false }; // I8 — exact allowlist, fail closed if empty
   if (nbf !== undefined) {
-    if (typeof nbf !== "number" || nbf > now + tol) return { accept: false }; // I9
+    if (!isFiniteNumber(nbf) || nbf > now + tol) return { accept: false }; // I9
   }
   if (typeof sub !== "string" || sub === "") return { accept: false }; // I10
 

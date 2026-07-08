@@ -7,6 +7,7 @@ import {
   mintWithJose,
   mintHmacAlg,
   signWithHeaderAlg,
+  signRawPayload,
   craftUnsigned,
   tamperPayloadByte,
   b64urlStr,
@@ -445,6 +446,116 @@ describe("clock tolerance (nbf) default 60", () => {
     expect(
       await verifyIdentityJwt(t, SECRET, { now: NOW, clockToleranceSeconds: 0, allowedIssuers: DEFAULT_ALLOW }),
     ).toBeNull();
+  });
+});
+
+// ===========================================================================
+// Fail-closed hardening
+// ===========================================================================
+
+describe("fail-closed hardening", () => {
+  it("H1a empty secret rejects without throwing", async () => {
+    const t = await mintWithJose(baseClaims());
+    await expect(
+      verifyIdentityJwt(t, "", { now: NOW, allowedIssuers: DEFAULT_ALLOW }),
+    ).resolves.toBeNull();
+  });
+
+  it("H2a expired token with NaN now -> null", async () => {
+    const t = await mintWithJose(baseClaims({ exp: NOW - 9999 }));
+    expect(
+      await verifyIdentityJwt(t, SECRET, {
+        now: NaN,
+        allowedIssuers: [ISS],
+      }),
+    ).toBeNull();
+    await checkAgainstReference(t, SECRET, true, {
+      now: NaN,
+      allowedIssuers: [ISS],
+    });
+  });
+
+  it("H2b expired token with NaN clockToleranceSeconds -> null", async () => {
+    const t = await mintWithJose(baseClaims({ exp: NOW - 9999 }));
+    expect(
+      await verifyIdentityJwt(t, SECRET, {
+        now: NOW,
+        clockToleranceSeconds: NaN,
+        allowedIssuers: [ISS],
+      }),
+    ).toBeNull();
+    await checkAgainstReference(t, SECRET, true, {
+      now: NOW,
+      clockToleranceSeconds: NaN,
+      allowedIssuers: [ISS],
+    });
+  });
+
+  it("H2c future nbf with NaN now -> null", async () => {
+    const t = await mintWithJose(baseClaims({ nbf: NOW + 9999 }));
+    expect(
+      await verifyIdentityJwt(t, SECRET, {
+        now: NaN,
+        allowedIssuers: [ISS],
+      }),
+    ).toBeNull();
+    await checkAgainstReference(t, SECRET, true, {
+      now: NaN,
+      allowedIssuers: [ISS],
+    });
+  });
+
+  it("H3a raw exp 1e400 (Infinity) -> null", async () => {
+    const t = await signRawPayload(
+      `{"sub":"cail-subject-abc","aud":${JSON.stringify(
+        AUD,
+      )},"iss":${JSON.stringify(ISS)},"exp":1e400}`,
+    );
+    expect(
+      await verifyIdentityJwt(t, SECRET, {
+        now: NOW,
+        allowedIssuers: [ISS],
+      }),
+    ).toBeNull();
+    await checkAgainstReference(t, SECRET, true, {
+      now: NOW,
+      allowedIssuers: [ISS],
+    });
+  });
+
+  it("H3b raw nbf -1e400 (-Infinity) -> null", async () => {
+    const t = await signRawPayload(
+      `{"sub":"cail-subject-abc","aud":${JSON.stringify(
+        AUD,
+      )},"iss":${JSON.stringify(ISS)},"exp":${NOW + 3600},"nbf":-1e400}`,
+    );
+    expect(
+      await verifyIdentityJwt(t, SECRET, {
+        now: NOW,
+        allowedIssuers: [ISS],
+      }),
+    ).toBeNull();
+    await checkAgainstReference(t, SECRET, true, {
+      now: NOW,
+      allowedIssuers: [ISS],
+    });
+  });
+
+  it("H2-control finite now keeps ordinary expired/fresh behavior", async () => {
+    const expired = await mintWithJose(baseClaims({ exp: NOW - 9999 }));
+    const fresh = await mintWithJose(baseClaims());
+    expect(
+      await verifyIdentityJwt(expired, SECRET, {
+        now: NOW,
+        allowedIssuers: [ISS],
+      }),
+    ).toBeNull();
+    expect(
+      await verifyIdentityJwt(fresh, SECRET, {
+        now: NOW,
+        allowedIssuers: [ISS],
+      }),
+    ).not.toBeNull();
   });
 });
 

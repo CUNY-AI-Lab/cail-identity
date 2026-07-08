@@ -86,21 +86,37 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
 export async function verifyIdentityJwt(
   token: string,
   secret: string,
   opts?: VerifyOptions,
 ): Promise<CailIdentity | null> {
   if (typeof token !== "string" || typeof secret !== "string") return null;
+  if (secret.length === 0) return null;
 
-  const now =
-    opts && typeof opts.now === "number"
-      ? opts.now
-      : Math.floor(Date.now() / 1000);
-  const tol =
-    opts && typeof opts.clockToleranceSeconds === "number"
-      ? opts.clockToleranceSeconds
-      : 60;
+  // `now`/`tol` are optional: `undefined` (or absent) means "use the default".
+  // But a PRESENT non-finite value (NaN, ±Infinity) is caller-supplied garbage
+  // that would silently disable the exp/nbf checks (`NaN <= x` is always false),
+  // so it fails closed to null rather than accepting every token.
+  let now: number;
+  if (opts && opts.now !== undefined) {
+    if (!isFiniteNumber(opts.now)) return null;
+    now = opts.now;
+  } else {
+    now = Math.floor(Date.now() / 1000);
+  }
+
+  let tol: number;
+  if (opts && opts.clockToleranceSeconds !== undefined) {
+    if (!isFiniteNumber(opts.clockToleranceSeconds)) return null;
+    tol = opts.clockToleranceSeconds;
+  } else {
+    tol = 60;
+  }
 
   // I1 — structure: exactly three dot-separated parts.
   const parts = token.split(".");
@@ -149,7 +165,7 @@ export async function verifyIdentityJwt(
   const { exp, aud, iss, nbf, sub } = payload;
 
   // I6 — exp required; reject only when exp <= now - tol (valid through exp+tol).
-  if (typeof exp !== "number" || exp <= now - tol) return null;
+  if (!isFiniteNumber(exp) || exp <= now - tol) return null;
 
   // I7 — aud exact.
   if (aud !== "cail-internal") return null;
@@ -160,9 +176,9 @@ export async function verifyIdentityJwt(
     opts && Array.isArray(opts.allowedIssuers) ? opts.allowedIssuers : [];
   if (typeof iss !== "string" || !allowedIssuers.includes(iss)) return null;
 
-  // I9 — nbf: if present, must be a number and not in the future past tol.
+  // I9 — nbf: if present, must be a finite number and not in the future past tol.
   if (nbf !== undefined) {
-    if (typeof nbf !== "number" || nbf > now + tol) return null;
+    if (!isFiniteNumber(nbf) || nbf > now + tol) return null;
   }
 
   // I10 — sub non-empty string.
