@@ -4,10 +4,9 @@ Verify the CAIL identity JWT. One small, load-bearing function: hand it the
 gateway-signed `X-CAIL-Identity-JWT` and the shared secret, get back the CAIL
 subject — or `null` on any failure. Nothing else.
 
-This is the **authentication boundary** for the CAIL fleet. It used to be
-hand-copied into every service, and the copies drifted (one skipped `nbf`,
-another accepted a token from `evil.example/cail-sso`). Now there's one
-implementation, versioned, with the whole claim set audited in one place.
+This is the **authentication boundary** for the CAIL fleet — one versioned
+implementation, with the whole claim set defined and tested in a single place,
+so every service verifies identity the same way.
 
 Pure Web Crypto (`crypto.subtle`, `TextEncoder`, `atob`) — the same source runs
 unchanged in **Cloudflare Workers** and **Node ≥20**. The secret is a function
