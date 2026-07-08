@@ -1,62 +1,80 @@
-# `@cuny-ai-lab/cail-identity`
+# @cuny-ai-lab/cail-identity
 
-The CAIL identity-JWT verifier — one pure, load-bearing primitive. It verifies
-the gateway-signed CAIL identity JWT (HS256) and returns a normalized identity,
-or `null` on **any** failure.
+Verify the CAIL identity JWT. One small, load-bearing function: hand it the
+gateway-signed `X-CAIL-Identity-JWT` and the shared secret, get back the CAIL
+subject — or `null` on any failure. Nothing else.
 
-Pure Web Crypto only (`crypto.subtle`, `TextEncoder`, `atob`): the same source
-runs unchanged in **Cloudflare Workers** and **Node ≥20**. The public surface is
-`string`/`number`/plain-object only — no ambient Cloudflare types leak out.
+This is the **authentication boundary** for the CAIL fleet. It used to be
+hand-copied into every service, and the copies drifted (one skipped `nbf`,
+another accepted a token from `evil.example/cail-sso`). Now there's one
+implementation, versioned, with the whole claim set audited in one place.
 
-This package replaces the hand-copied verifier that had drifted across five
-repos. The 10 invariants below **are the semver contract**: loosening or
-removing any one is a major bump every consumer opts into deliberately.
+Pure Web Crypto (`crypto.subtle`, `TextEncoder`, `atob`) — the same source runs
+unchanged in **Cloudflare Workers** and **Node ≥20**. The secret is a function
+argument, never stored; the package is logic only and safe to be public.
+
+## Who needs this
+
+Any service that *receives* an `X-CAIL-Identity-JWT` and needs to trust it —
+the model proxy, the key service, and any tool that keys its own data
+(workspaces, ownership, budgets) by the CAIL subject. If you only *call* the
+proxy and never verify a token (a browser frontend, a deployed project), you
+want [`@cuny-ai-lab/cail-client`](https://github.com/CUNY-AI-Lab/cail-client)
+instead, not this.
 
 ## Install
 
-Published to GitHub Packages (org-scoped registry). Consumers add an `.npmrc`:
-
-```ini
-# .npmrc
-@cuny-ai-lab:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
-```
+Consumed as a public git dependency. The package commits its build output, so
+it resolves with no build step:
 
 ```bash
-npm install @cuny-ai-lab/cail-identity
+bun add github:CUNY-AI-Lab/cail-identity
+# or
+npm install github:CUNY-AI-Lab/cail-identity
 ```
 
-## Usage
+Pin to a tag or commit for reproducibility, e.g.
+`github:CUNY-AI-Lab/cail-identity#v1.0.0`.
+
+> Not on GitHub Packages: that registry can't host public packages and needs a
+> `write:packages` token to publish. The public git-dep above is the supported
+> path.
+
+## Quick start
 
 ```ts
 import {
   verifyIdentityJwt,
   CAIL_CANONICAL_ISSUER,
+  CAIL_STAGING_ISSUER,
   type CailIdentity,
 } from "@cuny-ai-lab/cail-identity";
 
 const identity = await verifyIdentityJwt(token, env.CAIL_IDENTITY_JWT_SECRET, {
-  // REQUIRED to accept anything — an unconfigured allowlist rejects all tokens.
-  allowedIssuers: [CAIL_CANONICAL_ISSUER],
+  // Which issuers this service trusts. REQUIRED — an unconfigured allowlist
+  // rejects every token. List staging only where you accept staging tokens.
+  allowedIssuers: [CAIL_CANONICAL_ISSUER, CAIL_STAGING_ISSUER],
 });
+
 if (!identity) {
-  // fail closed — 401. Never inspect WHY: there is no failure-reason oracle.
+  // Fail closed. There is no failure-reason oracle — you get `null` or nothing.
   return new Response("Unauthorized", { status: 401 });
 }
-// identity.subject is the stable pseudonymous CAIL subject — key all user
-// data (budgets, workspaces, audit) by it, never by email.
+
+// identity.subject is the stable pseudonymous CAIL subject. Key ALL user data
+// (budgets, workspaces, audit) by it — never by email.
 ```
 
-### Signature
+## Signature
 
 ```ts
 verifyIdentityJwt(
   token: string,
   secret: string,
   opts?: {
-    now?: number;
-    clockToleranceSeconds?: number;
-    allowedIssuers?: string[];
+    allowedIssuers?: string[];      // exact-match set; absent/empty ⇒ reject all
+    clockToleranceSeconds?: number; // default 60; 0 = strict RFC boundary
+    now?: number;                   // default Math.floor(Date.now()/1000)
   },
 ): Promise<CailIdentity | null>
 
@@ -67,82 +85,71 @@ type CailIdentity = {
   entitlements: string[];
 };
 
-// Convenience constants for composing your allowlist:
+// Convenience constants for composing allowedIssuers:
 export const CAIL_CANONICAL_ISSUER = "https://tools.ailab.gc.cuny.edu/cail-sso";
-export const CAIL_STAGING_ISSUER = "https://tools.cuny.qzz.io/cail-sso";
+export const CAIL_STAGING_ISSUER   = "https://tools.cuny.qzz.io/cail-sso";
 ```
 
-- `secret` is a **function argument** — never stored, never logged. The package
-  carries logic only and is safe to publish publicly. Inject it at runtime
-  (`CAIL_IDENTITY_JWT_SECRET`).
-- `now` defaults to `Math.floor(Date.now() / 1000)`; inject a fixed clock in
-  tests or deterministic consumers.
-- `clockToleranceSeconds` defaults to **60**. See the clock-tolerance note below.
-- `allowedIssuers` is an **exact-match** issuer allowlist (I8). It is **required
-  to accept anything**: absent or empty rejects every token (fail closed).
-  Compose it from the exported constants — accept prod only:
-  `{ allowedIssuers: [CAIL_CANONICAL_ISSUER] }`; accept prod + staging:
-  `{ allowedIssuers: [CAIL_CANONICAL_ISSUER, CAIL_STAGING_ISSUER] }`.
+- **`secret`** — inject at runtime (`CAIL_IDENTITY_JWT_SECRET`); never hard-code.
+- **`allowedIssuers`** — exact-match, not suffix. Absent or empty rejects every
+  token (fail closed). Staging is accepted only by being listed.
+- **`clockToleranceSeconds`** — symmetric leeway on `exp`/`nbf`, default 60 (see
+  below). Pass `0` for the strict boundary.
+- **`now`** — inject a fixed clock in tests.
 
-## The contract (10 invariants)
+## The contract — 10 invariants
 
-Accept **iff all 10 hold**, else return `null` — never throw, never distinguish
-which check failed.
+Accept **iff all ten hold**, else return `null`. Never throws; never tells you
+which check failed. Loosening or removing any invariant is a **major** semver
+bump every consumer opts into.
 
 | # | Invariant | Rejects when |
 |---|-----------|--------------|
 | I1 | Structure | `token.split(".")` ≠ 3 parts |
 | I2 | Encoding | any segment is not valid base64url |
 | I3 | JSON | header or payload is not a JSON **object** |
-| I4 | **Alg pinned** | `header.alg !== "HS256"` — the algorithm is hard-coded; the token never chooses it (`none` / `HS384` / `RS256` / HS-confusion all rejected) |
-| I5 | **Signature** | `HMAC-SHA256("<headerB64>.<payloadB64>", secret) !== signature` (constant-time via `crypto.subtle.verify`) |
+| I4 | **Alg pinned** | `header.alg !== "HS256"` — hard-coded; the token never chooses the algorithm (`none`/`HS384`/`RS256`/HS-confusion all rejected) |
+| I5 | **Signature** | HMAC-SHA256 over `"<headerB64>.<payloadB64>"` with `secret` ≠ signature (constant-time via `crypto.subtle.verify`) |
 | I6 | **exp required** | `typeof exp !== "number"` OR `exp <= now - tol` |
 | I7 | **aud** | `aud !== "cail-internal"` (exact) |
-| I8 | **iss exact allowlist** | `typeof iss !== "string"` OR `iss` is not an exact member of `opts.allowedIssuers` — **exact match against a configured set**, not suffix and not substring. Absent/empty `allowedIssuers` rejects ALL tokens (fail closed). Staging is accepted only by being *listed*. (Supersedes the old `endsWith("/cail-sso")`, which accepted `https://evil.example/cail-sso`.) |
-| I9 | **nbf if present** | `nbf` present AND (`typeof nbf !== "number"` OR `nbf > now + tol`). Absent `nbf` is allowed. |
+| I8 | **iss allowlist** | `iss` is not an exact member of `allowedIssuers` — exact match, not suffix/substring. Absent/empty allowlist rejects all. |
+| I9 | **nbf if present** | `nbf` present AND (`typeof nbf !== "number"` OR `nbf > now + tol`); absent `nbf` allowed |
 | I10 | **sub** | `typeof sub !== "string"` OR `sub === ""` |
 
-**Output mapping (on accept):** `subject = sub`; `email` / `name` are passed
-through only if they are strings, else `undefined`; `entitlements` is the array
-filtered to strings, defaulting to `[]`. Unknown claims are dropped. The input
-is never mutated.
-
-**Invariants that are the whole point:** fail closed on any ambiguity (including
-an unconfigured issuer allowlist); no algorithm agility (HS256 pinned in code);
-exact-match `iss` and `aud` — trust only the issuers you explicitly list;
-verify-only — identity comes only from a validly-signed token, never from
-`X-CAIL-*` headers.
+On accept: `subject = sub`; `email`/`name` pass through only if strings;
+`entitlements` is filtered to strings (default `[]`); unknown claims are
+dropped; the input is never mutated.
 
 ## Clock tolerance
 
-`clockToleranceSeconds` (default **60**) is symmetric leeway on `exp` and `nbf`,
-the RFC 7519 §4.1 "leeway" case for verification across independently-NTP'd
-hosts (60s is the OIDC norm; the JWT is a short-lived session-derived
-credential, so the security cost of 60s is negligible).
-
-- `exp` rejects only when `exp <= now - tol` — a token is valid **through**
-  `exp + tol`.
-- `nbf` rejects only when `nbf > now + tol`.
-- `clockToleranceSeconds: 0` restores the strict RFC boundary
-  (`exp <= now` rejects, `nbf > now` rejects). Strict is one argument away.
+`clockToleranceSeconds` (default **60**) is symmetric leeway on `exp` and `nbf`
+— the RFC 7519 §4.1 leeway case for verifying across independently-NTP'd hosts,
+and the OIDC norm. `exp` is valid **through** `exp + tol`; `nbf` rejects only
+when `nbf > now + tol`. Pass `0` to restore the strict RFC boundary
+(`exp <= now`, `nbf > now`). The security cost of 60s is negligible — the JWT is
+a short-lived, session-derived credential.
 
 ## Development
 
 ```bash
 npm install
-npm run typecheck   # tsc: build config (no ambient node types) + test config
-npm run build       # emit dist/ (JS + .d.ts)
-npm test            # vitest — the §5 vector table IS the contract
+npm run typecheck   # tsc: build config (clean public surface) + test config
+npm run build       # emit dist/ (JS + .d.ts) — committed so git-deps resolve
+npm test            # vitest — the vector table IS the contract
 ```
 
-Tests mint the valid tokens with [`jose`](https://github.com/panva/jose) (an
-independent, audited signer — never our own signer verifying our own output)
-and hand-craft the malformed fixtures. A dependency-free **reference reader** in
-`test/fixtures.ts` re-derives accept/reject from the raw claims and the I1–I10
-rules, so the suite is not merely asserting against the implementation it tests.
+Tests mint valid tokens with [`jose`](https://github.com/panva/jose) (an
+independent audited signer, never our own signer verifying our own output) and
+hand-craft the malformed cases. A dependency-free reference reader re-derives
+accept/reject from the raw claims, so the suite validates the contract, not just
+the implementation.
 
 ## Scope
 
-**In (v1):** this verifier + its result type. **Out:** the origin check, the
-CAIL error envelope, the subject-HMAC derivation (minted by the gateway; the
-verifier only *reads* the derived `sub`), and any transport/framework glue.
+**In (v1):** this verifier and its result type. **Out:** the origin/CSRF check,
+the CAIL error envelope, the subject-HMAC derivation (the gateway mints `sub`;
+this only *reads* it), and any transport or framework glue.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
