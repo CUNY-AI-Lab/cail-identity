@@ -86,6 +86,10 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function ownProp(obj: Record<string, unknown>, key: string): unknown {
+  return Object.hasOwn(obj, key) ? obj[key] : undefined;
+}
+
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
@@ -144,7 +148,7 @@ export async function verifyIdentityJwt(
 
   // I4 — alg pinned. Never read alg from the token to CHOOSE the algorithm;
   // it may only equal the one hard-coded value.
-  if (header.alg !== "HS256") return null;
+  if (ownProp(header, "alg") !== "HS256") return null;
 
   // I5 — signature: HMAC-SHA256 over "<headerB64>.<payloadB64>", constant-time.
   const key = await crypto.subtle.importKey(
@@ -162,7 +166,11 @@ export async function verifyIdentityJwt(
   );
   if (!valid) return null;
 
-  const { exp, aud, iss, nbf, sub } = payload;
+  const exp = ownProp(payload, "exp");
+  const aud = ownProp(payload, "aud");
+  const iss = ownProp(payload, "iss");
+  const nbf = ownProp(payload, "nbf");
+  const sub = ownProp(payload, "sub");
 
   // I6 — exp required; reject only when exp <= now - tol (valid through exp+tol).
   if (!isFiniteNumber(exp) || exp <= now - tol) return null;
@@ -185,12 +193,15 @@ export async function verifyIdentityJwt(
   if (typeof sub !== "string" || sub === "") return null;
 
   // Output mapping. Unknown claims dropped; input never mutated.
+  const email = ownProp(payload, "email");
+  const name = ownProp(payload, "name");
+  const entitlements = ownProp(payload, "entitlements");
   return {
     subject: sub,
-    email: typeof payload.email === "string" ? payload.email : undefined,
-    name: typeof payload.name === "string" ? payload.name : undefined,
-    entitlements: Array.isArray(payload.entitlements)
-      ? payload.entitlements.filter((e): e is string => typeof e === "string")
+    email: typeof email === "string" ? email : undefined,
+    name: typeof name === "string" ? name : undefined,
+    entitlements: Array.isArray(entitlements)
+      ? entitlements.filter((e): e is string => typeof e === "string")
       : [],
   };
 }
