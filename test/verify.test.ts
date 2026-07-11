@@ -578,6 +578,36 @@ describe("output hygiene", () => {
     expect(got?.entitlements).toEqual([]);
   });
 
+  it("V25c malformed entitlements fail CLOSED: token stays accepted, privileges never elevate", async () => {
+    // Wrong-typed claims collapse to [] — but the identity itself is still
+    // returned (a producer bug must not become total access loss).
+    for (const malformed of [
+      { admin: true },
+      null,
+      42,
+      true,
+    ]) {
+      const t = await mintWithJose(baseClaims({ entitlements: malformed }));
+      const got = await verifyIdentityJwt(t, SECRET, {
+        now: NOW,
+        allowedIssuers: DEFAULT_ALLOW,
+      });
+      expect(got, "verified token must NOT be rejected").not.toBeNull();
+      expect(got?.subject).toBe("cail-subject-abc");
+      expect(got?.entitlements).toEqual([]);
+    }
+    // Array with non-string members: output is exactly the string members —
+    // nothing is coerced INTO a privilege (no String() of objects/numbers).
+    const t = await mintWithJose(
+      baseClaims({ entitlements: [{ toString: "admin" }, 1, "real", ["admin"]] }),
+    );
+    const got = await verifyIdentityJwt(t, SECRET, {
+      now: NOW,
+      allowedIssuers: DEFAULT_ALLOW,
+    });
+    expect(got?.entitlements).toEqual(["real"]);
+  });
+
   it("V26 email/name non-string -> undefined", async () => {
     const t = await mintWithJose(baseClaims({ email: 123, name: { x: 1 } }));
     const got = await verifyIdentityJwt(t, SECRET, { now: NOW, allowedIssuers: DEFAULT_ALLOW });

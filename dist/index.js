@@ -56,6 +56,9 @@ function base64UrlDecode(segment) {
 function isPlainObject(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+function ownProp(obj, key) {
+    return Object.hasOwn(obj, key) ? obj[key] : undefined;
+}
 function isFiniteNumber(value) {
     return typeof value === "number" && Number.isFinite(value);
 }
@@ -113,14 +116,18 @@ export async function verifyIdentityJwt(token, secret, opts) {
         return null;
     // I4 — alg pinned. Never read alg from the token to CHOOSE the algorithm;
     // it may only equal the one hard-coded value.
-    if (header.alg !== "HS256")
+    if (ownProp(header, "alg") !== "HS256")
         return null;
     // I5 — signature: HMAC-SHA256 over "<headerB64>.<payloadB64>", constant-time.
     const key = await crypto.subtle.importKey("raw", utf8Bytes(secret), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
     const valid = await crypto.subtle.verify("HMAC", key, signature, utf8Bytes(`${headerB64}.${payloadB64}`));
     if (!valid)
         return null;
-    const { exp, aud, iss, nbf, sub } = payload;
+    const exp = ownProp(payload, "exp");
+    const aud = ownProp(payload, "aud");
+    const iss = ownProp(payload, "iss");
+    const nbf = ownProp(payload, "nbf");
+    const sub = ownProp(payload, "sub");
     // I6 — exp required; reject only when exp <= now - tol (valid through exp+tol).
     if (!isFiniteNumber(exp) || exp <= now - tol)
         return null;
@@ -141,12 +148,29 @@ export async function verifyIdentityJwt(token, secret, opts) {
     if (typeof sub !== "string" || sub === "")
         return null;
     // Output mapping. Unknown claims dropped; input never mutated.
+    const email = ownProp(payload, "email");
+    const name = ownProp(payload, "name");
+    // Entitlements on a signature-VERIFIED token: a malformed claim — a
+    // non-array value, or array members that are not strings — is coerced by
+    // DROPPING the malformed parts (fail closed: privileges can only shrink,
+    // never elevate). This is deliberate on both sides:
+    //   - NOT a rejection: a gateway producer bug in the entitlements claim
+    //     must degrade to "fewer privileges", never to total access loss for
+    //     an otherwise-valid identity.
+    //   - NOT logged/signaled: this primitive is pure (browser/Workers/Node,
+    //     no console, no diagnostics surface) and its whole contract is
+    //     "identity or null, minimal throwing" — there is no in-contract
+    //     channel to report a claim anomaly, so visibility is the VERIFIED
+    //     CONSUMER'S concern, not this verifier's.
+    // Pinned by vectors V25/V25b/V25c (malformed entitlements filter to
+    // strings / collapse to [] and never elevate).
+    const entitlements = ownProp(payload, "entitlements");
     return {
         subject: sub,
-        email: typeof payload.email === "string" ? payload.email : undefined,
-        name: typeof payload.name === "string" ? payload.name : undefined,
-        entitlements: Array.isArray(payload.entitlements)
-            ? payload.entitlements.filter((e) => typeof e === "string")
+        email: typeof email === "string" ? email : undefined,
+        name: typeof name === "string" ? name : undefined,
+        entitlements: Array.isArray(entitlements)
+            ? entitlements.filter((e) => typeof e === "string")
             : [],
     };
 }
