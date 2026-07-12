@@ -11,7 +11,9 @@
 
 import { SignJWT, base64url } from "jose";
 
-export const SECRET = "S-the-known-test-secret";
+// 34 UTF-8 bytes: the verifier enforces the RFC 7518 §3.2 minimum HS256 key
+// size (256 bits = 32 bytes), so the shared test secret must clear the floor.
+export const SECRET = "S-the-known-test-secret-0123456789";
 export const WRONG_SECRET = "not-the-secret";
 export const NOW = 1_000_000;
 export const DEFAULT_TOL = 60;
@@ -159,7 +161,10 @@ function decodeJson(seg: string): unknown | typeof INVALID {
   if (!isB64Url(seg)) return INVALID;
   try {
     const bytes = base64url.decode(seg);
-    return JSON.parse(new TextDecoder().decode(bytes));
+    // Canonicality (RFC 4648 §3.5): non-zero trailing padding bits reject.
+    if (base64url.encode(bytes) !== seg) return INVALID;
+    // Fatal UTF-8 (RFC 7519 §7.2 / RFC 8725 §3.7): invalid bytes reject.
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
   } catch {
     return INVALID;
   }
@@ -202,6 +207,8 @@ export function referenceAccept(
     return { accept: false }; // I3
 
   if (header.alg !== "HS256") return { accept: false }; // I4
+  // I4b — RFC 7515 §4.1.11: any own `crit` member rejects (none supported).
+  if (Object.hasOwn(header, "crit")) return { accept: false };
   if (!sigValid) return { accept: false }; // I5
 
   const { exp, aud, iss, nbf, sub } = payload;

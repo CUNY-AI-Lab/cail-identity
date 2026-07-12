@@ -90,6 +90,9 @@ export const CAIL_STAGING_ISSUER   = "https://tools.cuny.qzz.io/cail-sso";
 ```
 
 - **`secret`** — inject at runtime (`CAIL_IDENTITY_JWT_SECRET`); never hard-code.
+  Must be at least **32 UTF-8 bytes** (RFC 7518 §3.2 HS256 minimum key size); a
+  shorter secret fails closed — every verification returns `null`. Production
+  provisioning (`openssl rand -hex 32` = 64 bytes) clears this comfortably.
 - **`allowedIssuers`** — exact-match, not suffix. Absent or empty rejects every
   token (fail closed). Staging is accepted only by being listed.
 - **`clockToleranceSeconds`** — symmetric leeway on `exp`/`nbf`, default 60 (see
@@ -105,9 +108,9 @@ bump every consumer opts into.
 | # | Invariant | Rejects when |
 |---|-----------|--------------|
 | I1 | Structure | `token.split(".")` ≠ 3 parts |
-| I2 | Encoding | any segment is not valid base64url |
-| I3 | JSON | header or payload is not a JSON **object** |
-| I4 | **Alg pinned** | `header.alg !== "HS256"` — hard-coded; the token never chooses the algorithm (`none`/`HS384`/`RS256`/HS-confusion all rejected) |
+| I2 | Encoding | any segment is not valid **canonical** base64url (non-zero trailing padding bits rejected per RFC 4648 §3.5 — the token string is not malleable) |
+| I3 | JSON | header or payload is not valid-UTF-8 (fatal decode, RFC 8725 §3.7) JSON parsing to an **object** |
+| I4 | **Alg pinned** | `header.alg !== "HS256"` — hard-coded; the token never chooses the algorithm (`none`/`HS384`/`RS256`/HS-confusion all rejected). A header carrying its own `crit` member also rejects (RFC 7515 §4.1.11) |
 | I5 | **Signature** | HMAC-SHA256 over `"<headerB64>.<payloadB64>"` with `secret` ≠ signature (constant-time via `crypto.subtle.verify`) |
 | I6 | **exp required** | `typeof exp !== "number"` OR `exp <= now - tol` |
 | I7 | **aud** | `aud !== "cail-internal"` (exact) |

@@ -5,8 +5,8 @@
  * JWT (HS256) and returns a normalized identity, or `null` on ANY failure.
  *
  * Design contract (see README + CAIL_IDENTITY_PRIMITIVE_SPEC.md):
- *   - Pure Web Crypto only (crypto.subtle, TextEncoder, atob). Runs unchanged
- *     in Cloudflare Workers and Node >=20.
+ *   - Pure Web Crypto only (crypto.subtle, TextEncoder, atob/btoa). Runs
+ *     unchanged in Cloudflare Workers and Node >=20.
  *   - Algorithm is PINNED to HS256 in code; the token never chooses it.
  *   - `secret` is a function argument — never stored, never logged.
  *   - Fail closed: any ambiguity returns `null`. Never throws, never reveals a
@@ -47,7 +47,11 @@ export const CAIL_CANONICAL_ISSUER = "https://tools.ailab.gc.cuny.edu/cail-sso";
 export const CAIL_STAGING_ISSUER = "https://tools.cuny.qzz.io/cail-sso";
 
 const encoder = new TextEncoder();
-const decoder = new TextDecoder();
+// fatal:true — RFC 7519 §7.2 / RFC 8725 §3.7 require the header and payload
+// to be valid UTF-8 JSON. The default lenient decoder would smuggle invalid
+// bytes through as U+FFFD instead of rejecting; fatal mode throws inside the
+// existing try/catch, so malformed bytes fail closed to null.
+const decoder = new TextDecoder("utf-8", { fatal: true });
 
 /**
  * UTF-8 encode into an ArrayBuffer-backed Uint8Array. Web Crypto's
@@ -72,6 +76,12 @@ function base64UrlDecode(segment: string): Uint8Array<ArrayBuffer> | null {
     const converted = segment.replace(/-/g, "+").replace(/_/g, "/");
     const padded = converted + "=".repeat((4 - (converted.length % 4)) % 4);
     const binary = atob(padded);
+    // Canonicality (RFC 4648 §3.5: trailing padding bits MUST be zero).
+    // atob implements forgiving-base64 and silently drops non-zero trailing
+    // bits, which would make the token STRING malleable — many encodings of
+    // the same signature bytes, all verifying. Re-encode and compare: a
+    // canonical segment round-trips byte-identically; anything else is null.
+    if (btoa(binary) !== padded) return null;
     // Allocate a standalone ArrayBuffer so the view is ArrayBuffer-backed
     // (not SharedArrayBuffer), which crypto.subtle's BufferSource requires.
     const bytes = new Uint8Array(new ArrayBuffer(binary.length));
@@ -101,6 +111,13 @@ export async function verifyIdentityJwt(
 ): Promise<CailIdentity | null> {
   if (typeof token !== "string" || typeof secret !== "string") return null;
   if (secret.length === 0) return null;
+  // RFC 7518 §3.2: an HS256 key MUST be at least as large as the hash output
+  // (256 bits = 32 bytes); RFC 8725 §3.5 / OWASP JWT cheat sheet: enforce
+  // strong symmetric keys. Web Crypto happily imports ANY key length (jose
+  // would refuse), so a misprovisioned deployment with a tiny secret would
+  // otherwise verify fine — fail closed instead. Measured in UTF-8 BYTES,
+  // not characters. (Production is `openssl rand -hex 32` = 64 bytes.)
+  if (encoder.encode(secret).length < 32) return null;
 
   // `now`/`tol` are optional: `undefined` (or absent) means "use the default".
   // But a PRESENT non-finite value (NaN, ±Infinity) is caller-supplied garbage
@@ -149,6 +166,12 @@ export async function verifyIdentityJwt(
   // I4 — alg pinned. Never read alg from the token to CHOOSE the algorithm;
   // it may only equal the one hard-coded value.
   if (ownProp(header, "alg") !== "HS256") return null;
+
+  // I4b — crit rejection. RFC 7515 §4.1.11: `crit` names header extensions
+  // the verifier MUST understand and process; this verifier implements none,
+  // so ANY header carrying its own `crit` member is rejected. (The gateway
+  // never sets it — this closes the conformance gap, not a live hole.)
+  if (Object.hasOwn(header, "crit")) return null;
 
   // I5 — signature: HMAC-SHA256 over "<headerB64>.<payloadB64>", constant-time.
   const key = await crypto.subtle.importKey(
