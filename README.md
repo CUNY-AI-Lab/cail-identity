@@ -43,6 +43,14 @@ Pin to a tag or commit for reproducibility, e.g.
 > `write:packages` token to publish. The public git-dep above is the supported
 > path.
 
+### Upgrade note: 32-byte secret minimum
+
+Current releases reject every token when `CAIL_IDENTITY_JWT_SECRET` is shorter
+than 32 UTF-8 bytes. Before pinning a hardened commit, confirm that the producer
+and every verifier use the same secret and that it meets this minimum. For new
+coordinated provisioning, `openssl rand -hex 32` produces a 64-byte ASCII
+secret. Changing only one side invalidates all tokens between them.
+
 ## Quick start
 
 ```ts
