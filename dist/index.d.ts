@@ -4,9 +4,9 @@
  * A single pure async function that verifies the gateway-signed CAIL identity
  * JWT (HS256) and returns a normalized identity, or `null` on ANY failure.
  *
- * Design contract (see README + CAIL_IDENTITY_PRIMITIVE_SPEC.md):
- *   - Pure Web Crypto only (crypto.subtle, TextEncoder, atob/btoa). Runs
- *     unchanged in Cloudflare Workers and Node >=20.
+ * Design contract (see README):
+ *   - JOSE/JWT protocol machinery is delegated to `jose`, which uses the same
+ *     Web Crypto APIs across Cloudflare Workers, browsers, Bun, and Node >=20.
  *   - Algorithm is PINNED to HS256 in code; the token never chooses it.
  *   - `secret` is a function argument — never stored, never logged.
  *   - Fail closed: any ambiguity returns `null`. Never throws, never reveals a

@@ -8,9 +8,13 @@ This is the **authentication boundary** for the CAIL fleet — one versioned
 implementation, with the whole claim set defined and tested in a single place,
 so every service verifies identity the same way.
 
-Pure Web Crypto (`crypto.subtle`, `TextEncoder`, `atob`) — the same source runs
-unchanged in **Cloudflare Workers** and **Node ≥20**. The secret is a function
-argument, never stored; the package is logic only and safe to be public.
+JWT signature and registered-claim verification are delegated to the
+zero-dependency [`jose`](https://github.com/panva/jose) library, which runs on
+Web Crypto across **Cloudflare Workers**, browsers, Bun, and **Node ≥20**. CAIL
+adds only its stricter profile: canonical base64url, fatal UTF-8, own-property
+claims, an exact scalar audience, the HS256 key-size floor, and fail-closed
+`null`. The secret is a function argument, never stored; the package is logic
+only and safe to be public.
 
 ## Who needs this
 
@@ -111,7 +115,7 @@ bump every consumer opts into.
 | I2 | Encoding | any segment is not valid **canonical** base64url (non-zero trailing padding bits rejected per RFC 4648 §3.5 — the token string is not malleable) |
 | I3 | JSON | header or payload is not valid-UTF-8 (fatal decode, RFC 8725 §3.7) JSON parsing to an **object** |
 | I4 | **Alg pinned** | `header.alg !== "HS256"` — hard-coded; the token never chooses the algorithm (`none`/`HS384`/`RS256`/HS-confusion all rejected). A header carrying its own `crit` member also rejects (RFC 7515 §4.1.11) |
-| I5 | **Signature** | HMAC-SHA256 over `"<headerB64>.<payloadB64>"` with `secret` ≠ signature (constant-time via `crypto.subtle.verify`) |
+| I5 | **Signature** | `jose.jwtVerify` rejects unless the HMAC-SHA256 signature over `"<headerB64>.<payloadB64>"` verifies with the supplied secret and the allowed algorithm is exactly `HS256` |
 | I6 | **exp required** | `typeof exp !== "number"` OR `exp <= now - tol` |
 | I7 | **aud** | `aud !== "cail-internal"` (exact) |
 | I8 | **iss allowlist** | `iss` is not an exact member of `allowedIssuers` — exact match, not suffix/substring. Absent/empty allowlist rejects all. |
@@ -134,17 +138,20 @@ a short-lived, session-derived credential.
 ## Development
 
 ```bash
-npm install
-npm run typecheck   # tsc: build config (clean public surface) + test config
-npm run build       # emit dist/ (JS + .d.ts) — committed so git-deps resolve
-npm test            # vitest — the vector table IS the contract
+bun install
+bun run typecheck   # tsc: build config (clean public surface) + test config
+bun run build       # emit dist/ (JS + .d.ts) — committed so git-deps resolve
+bun run test        # Vitest; the vector table IS the contract
 ```
 
-Tests mint valid tokens with [`jose`](https://github.com/panva/jose) (an
-independent audited signer, never our own signer verifying our own output) and
-hand-craft the malformed cases. A dependency-free reference reader re-derives
-accept/reject from the raw claims, so the suite validates the contract, not just
-the implementation.
+Tests mint valid tokens with `jose` and hand-craft malformed cases. A
+dependency-free reference reader independently re-derives accept/reject from
+the raw claims, so the suite validates the CAIL profile rather than merely
+calling the production verifier twice.
+
+The runtime `jose` version is pinned exactly. Verification-library upgrades are
+reviewed and committed deliberately rather than entering auth consumers through
+an unrelated lockfile refresh.
 
 ## Scope
 

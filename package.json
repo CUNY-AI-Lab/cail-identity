@@ -1,7 +1,7 @@
 {
   "name": "@cuny-ai-lab/cail-identity",
   "version": "1.0.0",
-  "description": "The CAIL identity-JWT verifier: a pure Web-Crypto HS256 verifier for the trusted X-CAIL identity contract. Runs unchanged in Cloudflare Workers and Node >=20.",
+  "description": "The CAIL identity-JWT verifier: a jose-backed HS256 verifier for the trusted X-CAIL identity contract. Runs unchanged in Cloudflare Workers and Node >=20.",
   "type": "module",
   "license": "MIT",
   "sideEffects": false,
@@ -26,12 +26,14 @@
     "typecheck": "tsc -p tsconfig.build.json --noEmit && tsc -p tsconfig.test.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "prepublishOnly": "npm run build",
-    "prepare": "tsc -p tsconfig.build.json"
+    "prepublishOnly": "bun run build",
+    "prepare": "bun run build"
+  },
+  "dependencies": {
+    "jose": "6.2.3"
   },
   "devDependencies": {
     "@types/node": "^20.17.6",
-    "jose": "^5.9.6",
     "typescript": "^5.6.3",
     "vitest": "^2.1.8"
   },

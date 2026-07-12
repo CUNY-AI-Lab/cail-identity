@@ -4,9 +4,9 @@
  * A single pure async function that verifies the gateway-signed CAIL identity
  * JWT (HS256) and returns a normalized identity, or `null` on ANY failure.
  *
- * Design contract (see README + CAIL_IDENTITY_PRIMITIVE_SPEC.md):
- *   - Pure Web Crypto only (crypto.subtle, TextEncoder, atob/btoa). Runs
- *     unchanged in Cloudflare Workers and Node >=20.
+ * Design contract (see README):
+ *   - JOSE/JWT protocol machinery is delegated to `jose`, which uses the same
+ *     Web Crypto APIs across Cloudflare Workers, browsers, Bun, and Node >=20.
  *   - Algorithm is PINNED to HS256 in code; the token never chooses it.
  *   - `secret` is a function argument — never stored, never logged.
  *   - Fail closed: any ambiguity returns `null`. Never throws, never reveals a
@@ -14,6 +14,7 @@
  *   - Identity comes ONLY from a validly-signed token — no header trust, no
  *     subject derivation.
  */
+import { base64url, jwtVerify } from "jose";
 /** Canonical production issuer — list it in `allowedIssuers` to accept prod. */
 export const CAIL_CANONICAL_ISSUER = "https://tools.ailab.gc.cuny.edu/cail-sso";
 /** Staging issuer — list it in `allowedIssuers` to accept staging. */
@@ -24,46 +25,6 @@ const encoder = new TextEncoder();
 // bytes through as U+FFFD instead of rejecting; fatal mode throws inside the
 // existing try/catch, so malformed bytes fail closed to null.
 const decoder = new TextDecoder("utf-8", { fatal: true });
-/**
- * UTF-8 encode into an ArrayBuffer-backed Uint8Array. Web Crypto's
- * `BufferSource` requires an `ArrayBuffer` (not `SharedArrayBuffer`) view;
- * `TextEncoder.encode` is typed with the wider `ArrayBufferLike`, so we copy
- * into a fresh `ArrayBuffer`. Runtime-identical on Workers and Node.
- */
-function utf8Bytes(str) {
-    const src = encoder.encode(str);
-    const out = new Uint8Array(new ArrayBuffer(src.length));
-    out.set(src);
-    return out;
-}
-function base64UrlDecode(segment) {
-    // Reject anything that isn't strict base64url (atob is lax and would accept
-    // stray "+"/"/"; the whole point of I2 is that the segment IS base64url).
-    if (typeof segment !== "string" || !/^[A-Za-z0-9_-]*$/.test(segment)) {
-        return null;
-    }
-    try {
-        const converted = segment.replace(/-/g, "+").replace(/_/g, "/");
-        const padded = converted + "=".repeat((4 - (converted.length % 4)) % 4);
-        const binary = atob(padded);
-        // Canonicality (RFC 4648 §3.5: trailing padding bits MUST be zero).
-        // atob implements forgiving-base64 and silently drops non-zero trailing
-        // bits, which would make the token STRING malleable — many encodings of
-        // the same signature bytes, all verifying. Re-encode and compare: a
-        // canonical segment round-trips byte-identically; anything else is null.
-        if (btoa(binary) !== padded)
-            return null;
-        // Allocate a standalone ArrayBuffer so the view is ArrayBuffer-backed
-        // (not SharedArrayBuffer), which crypto.subtle's BufferSource requires.
-        const bytes = new Uint8Array(new ArrayBuffer(binary.length));
-        for (let i = 0; i < binary.length; i++)
-            bytes[i] = binary.charCodeAt(i);
-        return bytes;
-    }
-    catch {
-        return null;
-    }
-}
 function isPlainObject(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -72,6 +33,61 @@ function ownProp(obj, key) {
 }
 function isFiniteNumber(value) {
     return typeof value === "number" && Number.isFinite(value);
+}
+/**
+ * Apply the deliberately stricter parts of the CAIL token profile before
+ * handing protocol verification to `jose`.
+ *
+ * `jose` accepts equivalent non-canonical base64url spellings and decodes JSON
+ * with a non-fatal TextDecoder. It also follows the JWT standard in accepting
+ * an audience array, while CAIL's v1 contract requires one exact scalar. These
+ * checks preserve the established contract without reimplementing signatures,
+ * time validation, or JOSE algorithm handling.
+ */
+function inspectCailJwt(token) {
+    const parts = token.split(".");
+    if (parts.length !== 3)
+        return null;
+    const decoded = [];
+    try {
+        for (const segment of parts) {
+            if (!/^[A-Za-z0-9_-]*$/.test(segment))
+                return null;
+            const bytes = base64url.decode(segment);
+            if (base64url.encode(bytes) !== segment)
+                return null;
+            decoded.push(bytes);
+        }
+        const header = JSON.parse(decoder.decode(decoded[0]));
+        const payload = JSON.parse(decoder.decode(decoded[1]));
+        if (!isPlainObject(header) || !isPlainObject(payload))
+            return null;
+        // Own-property checks prevent a polluted Object.prototype from supplying
+        // security claims to a standards library that uses ordinary property reads.
+        if (ownProp(header, "alg") !== "HS256")
+            return null;
+        if (Object.hasOwn(header, "crit"))
+            return null;
+        const exp = ownProp(payload, "exp");
+        const aud = ownProp(payload, "aud");
+        const iss = ownProp(payload, "iss");
+        const nbf = ownProp(payload, "nbf");
+        const sub = ownProp(payload, "sub");
+        if (!isFiniteNumber(exp))
+            return null;
+        if (aud !== "cail-internal")
+            return null;
+        if (typeof iss !== "string")
+            return null;
+        if (nbf !== undefined && !isFiniteNumber(nbf))
+            return null;
+        if (typeof sub !== "string" || sub === "")
+            return null;
+        return { header, payload };
+    }
+    catch {
+        return null;
+    }
 }
 export async function verifyIdentityJwt(token, secret, opts) {
     if (typeof token !== "string" || typeof secret !== "string")
@@ -108,70 +124,33 @@ export async function verifyIdentityJwt(token, secret, opts) {
     else {
         tol = 60;
     }
-    // I1 — structure: exactly three dot-separated parts.
-    const parts = token.split(".");
-    if (parts.length !== 3)
+    const inspected = inspectCailJwt(token);
+    if (!inspected)
         return null;
-    const headerB64 = parts[0];
-    const payloadB64 = parts[1];
-    const signatureB64 = parts[2];
-    // I2 — encoding: every segment is valid base64url.
-    const headerBytes = base64UrlDecode(headerB64);
-    const payloadBytes = base64UrlDecode(payloadB64);
-    const signature = base64UrlDecode(signatureB64);
-    if (!headerBytes || !payloadBytes || !signature)
+    // I8 — an absent/empty allowlist rejects all tokens before verification.
+    const allowedIssuers = opts && Array.isArray(opts.allowedIssuers)
+        ? opts.allowedIssuers.filter((issuer) => typeof issuer === "string")
+        : [];
+    if (allowedIssuers.length === 0)
         return null;
-    // I3 — JSON: header and payload parse to JSON *objects*.
-    let header;
     let payload;
     try {
-        header = JSON.parse(decoder.decode(headerBytes));
-        payload = JSON.parse(decoder.decode(payloadBytes));
+        const verified = await jwtVerify(token, encoder.encode(secret), {
+            algorithms: ["HS256"],
+            audience: "cail-internal",
+            issuer: allowedIssuers,
+            requiredClaims: ["exp", "sub"],
+            clockTolerance: tol,
+            currentDate: new Date(now * 1000),
+        });
+        payload = verified.payload;
     }
     catch {
         return null;
     }
-    if (!isPlainObject(header) || !isPlainObject(payload))
-        return null;
-    // I4 — alg pinned. Never read alg from the token to CHOOSE the algorithm;
-    // it may only equal the one hard-coded value.
-    if (ownProp(header, "alg") !== "HS256")
-        return null;
-    // I4b — crit rejection. RFC 7515 §4.1.11: `crit` names header extensions
-    // the verifier MUST understand and process; this verifier implements none,
-    // so ANY header carrying its own `crit` member is rejected. (The gateway
-    // never sets it — this closes the conformance gap, not a live hole.)
-    if (Object.hasOwn(header, "crit"))
-        return null;
-    // I5 — signature: HMAC-SHA256 over "<headerB64>.<payloadB64>", constant-time.
-    const key = await crypto.subtle.importKey("raw", utf8Bytes(secret), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
-    const valid = await crypto.subtle.verify("HMAC", key, signature, utf8Bytes(`${headerB64}.${payloadB64}`));
-    if (!valid)
-        return null;
-    const exp = ownProp(payload, "exp");
-    const aud = ownProp(payload, "aud");
-    const iss = ownProp(payload, "iss");
-    const nbf = ownProp(payload, "nbf");
-    const sub = ownProp(payload, "sub");
-    // I6 — exp required; reject only when exp <= now - tol (valid through exp+tol).
-    if (!isFiniteNumber(exp) || exp <= now - tol)
-        return null;
-    // I7 — aud exact.
-    if (aud !== "cail-internal")
-        return null;
-    // I8 — iss EXACT-match against a configured allowlist (NOT suffix, NOT
-    // substring). Absent/empty allowlist rejects ALL tokens (fail closed).
-    const allowedIssuers = opts && Array.isArray(opts.allowedIssuers) ? opts.allowedIssuers : [];
-    if (typeof iss !== "string" || !allowedIssuers.includes(iss))
-        return null;
-    // I9 — nbf: if present, must be a finite number and not in the future past tol.
-    if (nbf !== undefined) {
-        if (!isFiniteNumber(nbf) || nbf > now + tol)
-            return null;
-    }
-    // I10 — sub non-empty string.
-    if (typeof sub !== "string" || sub === "")
-        return null;
+    // Keep the inspected own-property values authoritative. `jwtVerify` owns
+    // cryptography and registered-claim validation; CAIL owns its output shape.
+    const sub = ownProp(inspected.payload, "sub");
     // Output mapping. Unknown claims dropped; input never mutated.
     const email = ownProp(payload, "email");
     const name = ownProp(payload, "name");
