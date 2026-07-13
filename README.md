@@ -1,7 +1,7 @@
 # @cuny-ai-lab/cail-identity
 
-Verify the CAIL identity JWT. One small, load-bearing function: hand it the
-gateway-signed `X-CAIL-Identity-JWT` and the shared secret, get back the CAIL
+Verify the CAIL identity JWT. Hand a verifier the gateway-signed
+`X-CAIL-Identity-JWT` and its verification key material, get back the CAIL
 subject — or `null` on any failure. Nothing else.
 
 This is the **authentication boundary** for the CAIL fleet — one versioned
@@ -11,10 +11,12 @@ so every service verifies identity the same way.
 JWT signature and registered-claim verification are delegated to the
 zero-dependency [`jose`](https://github.com/panva/jose) library, which runs on
 Web Crypto across **Cloudflare Workers**, browsers, Bun, and **Node ≥20**. CAIL
-adds only its stricter profile: canonical base64url, fatal UTF-8, own-property
-claims, an exact scalar audience, the HS256 key-size floor, and fail-closed
-`null`. The secret is a function argument, never stored; the package is logic
-only and safe to be public.
+adds only its stricter profiles: canonical base64url, fatal UTF-8, own-property
+claims, pinned algorithms, exact issuer policy, strict audience shapes, and
+fail-closed `null`. V1 accepts HS256 with a shared secret. The additive V2
+verifier accepts RS256 with an in-memory public JWKS and supports key rotation.
+Key material is passed as a function argument and never stored; the package is
+logic only and safe to be public.
 
 ## Who needs this
 
@@ -53,6 +55,8 @@ secret. Changing only one side invalidates all tokens between them.
 
 ## Quick start
 
+### V1: HS256 shared secret
+
 ```ts
 import {
   verifyIdentityJwt,
@@ -76,7 +80,27 @@ if (!identity) {
 // (budgets, workspaces, audit) by it — never by email.
 ```
 
+### V2: RS256 public JWKS
+
+```ts
+import {
+  verifyIdentityJwtV2,
+  CAIL_CANONICAL_ISSUER,
+} from "@cuny-ai-lab/cail-identity";
+
+const identity = await verifyIdentityJwtV2(token, publicJwks, {
+  expectedAudience: "cail-internal",
+  allowedIssuers: [CAIL_CANONICAL_ISSUER],
+});
+
+if (!identity) {
+  return new Response("Unauthorized", { status: 401 });
+}
+```
+
 ## Signature
+
+### V1
 
 ```ts
 verifyIdentityJwt(
@@ -111,7 +135,32 @@ export const CAIL_STAGING_ISSUER   = "https://tools.cuny.qzz.io/cail-sso";
   below). Pass `0` for the strict boundary.
 - **`now`** — inject a fixed clock in tests.
 
-## The contract — 10 invariants
+### V2
+
+```ts
+verifyIdentityJwtV2(
+  token: string,
+  jwks: { keys: JWK[] },
+  opts: {
+    expectedAudience: string;
+    allowedIssuers: string[];
+    clockToleranceSeconds?: number; // default 60; must be nonnegative
+    now?: number;
+  },
+): Promise<CailIdentity | null>
+```
+
+- **`jwks`** — an in-memory public JSON Web Key Set. The token must carry a
+  nonempty own `kid`, and the set must contain exactly one matching eligible
+  RSA verification key. Distinct `kid` values may overlap during rotation.
+- **`expectedAudience`** — required nonempty string. The token `aud` may be the
+  exact scalar or a nonempty, duplicate-free string array containing it.
+- **`allowedIssuers`** — required nonempty, duplicate-free array of nonempty
+  exact issuer strings.
+- **`clockToleranceSeconds`** and **`now`** — the same clock controls as V1,
+  except V2 rejects negative tolerance.
+
+## V1 contract — 10 invariants
 
 Accept **iff all ten hold**, else return `null`. Never throws; never tells you
 which check failed. Loosening or removing any invariant is a **major** semver
@@ -134,6 +183,25 @@ On accept: `subject = sub`; `email`/`name` pass through only if strings;
 `entitlements` is filtered to strings (default `[]`); unknown claims are
 dropped; the input is never mutated.
 
+## V2 contract
+
+V2 returns the same `CailIdentity` shape and the same optional-claim behavior as
+V1. It accepts only when all of these checks pass:
+
+| Area | Requirement |
+|------|-------------|
+| Structure | Exactly three nonempty, canonical base64url segments; header and payload are fatal-UTF-8 JSON objects |
+| Header | Own `alg` is exactly `RS256`; own `kid` is a nonempty string; any own `crit` rejects |
+| Key selection | JWKS has exactly one matching public RSA key eligible for RS256 verification; ambiguous, unknown, malformed, private, encryption-only, or noncanonical key material rejects |
+| Signature | `jose.jwtVerify` verifies RSASSA-PKCS1-v1_5 with SHA-256 and the selected key; no other algorithm is allowed |
+| Audience | Own `aud` is the expected nonempty scalar, or a unique nonempty string array containing it |
+| Claims | Own `iss` exactly matches the configured allowlist; finite `exp` is required; finite `nbf` is checked when present; own `sub` is nonempty |
+| Failure | Every malformed, unsupported, unauthorized, or ambiguous input returns `null` without mutation or a reason oracle |
+
+An RSA signing-key rotation publishes old and new public keys together under
+different `kid` values. Reusing a `kid` while both keys are present creates an
+ambiguous selection and V2 rejects the token.
+
 ## Clock tolerance
 
 `clockToleranceSeconds` (default **60**) is symmetric leeway on `exp` and `nbf`
@@ -152,10 +220,9 @@ bun run build       # emit dist/ (JS + .d.ts) — committed so git-deps resolve
 bun run test        # Vitest; the vector table IS the contract
 ```
 
-Tests mint valid tokens with `jose` and hand-craft malformed cases. A
-dependency-free reference reader independently re-derives accept/reject from
-the raw claims, so the suite validates the CAIL profile rather than merely
-calling the production verifier twice.
+Tests mint valid HS256 and RS256 tokens with `jose` and hand-craft malformed
+cases. The V1 suite also uses a dependency-free reference reader to re-derive
+accept/reject from raw claims.
 
 The runtime `jose` version is pinned exactly. Verification-library upgrades are
 reviewed and committed deliberately rather than entering auth consumers through
@@ -163,9 +230,10 @@ an unrelated lockfile refresh.
 
 ## Scope
 
-**In (v1):** this verifier and its result type. **Out:** the origin/CSRF check,
-the CAIL error envelope, the subject-HMAC derivation (the gateway mints `sub`;
-this only *reads* it), and any transport or framework glue.
+**In:** the V1 HS256 verifier, the V2 RS256/JWKS verifier, and their shared
+result type. **Out:** JWKS fetching or caching, the origin/CSRF check, the CAIL
+error envelope, subject derivation (the gateway mints `sub`; these only read
+it), and any transport or framework glue.
 
 ## License
 
