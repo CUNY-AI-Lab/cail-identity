@@ -48,7 +48,7 @@ async function verify(
 }
 
 describe("verifyIdentityJwtV2 happy path and output", () => {
-  it("accepts a minimal RS256 token and preserves the V1 output shape", async () => {
+  it("accepts a minimal RS256 token and returns the canonical identity shape", async () => {
     const result = await verify(await mintRsaJwt(claims(), oldKey));
     expect(result).toEqual({
       subject: "cail-subject-abc",

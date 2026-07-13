@@ -1,7 +1,7 @@
 {
   "name": "@cuny-ai-lab/cail-identity",
-  "version": "1.1.0",
-  "description": "CAIL identity-JWT verifiers for the trusted HS256 and RS256/JWKS identity contracts. Runs unchanged in Cloudflare Workers and Node >=20.",
+  "version": "2.0.0",
+  "description": "CAIL RS256/JWKS identity-JWT verification for Cloudflare Workers and Node >=20.",
   "type": "module",
   "license": "MIT",
   "sideEffects": false,
