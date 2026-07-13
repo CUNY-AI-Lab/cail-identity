@@ -27,11 +27,11 @@ Pin a reviewed commit for reproducibility.
 
 ```ts
 import {
-  verifyIdentityJwtV2,
+  verifyIdentityJwt,
   CAIL_CANONICAL_ISSUER,
 } from "@cuny-ai-lab/cail-identity";
 
-const identity = await verifyIdentityJwtV2(token, publicJwks, {
+const identity = await verifyIdentityJwt(token, publicJwks, {
   expectedAudience: "cail:my-service",
   allowedIssuers: [CAIL_CANONICAL_ISSUER],
 });
@@ -40,7 +40,7 @@ if (!identity) return new Response("Unauthorized", { status: 401 });
 ```
 
 ```ts
-verifyIdentityJwtV2(
+verifyIdentityJwt(
   token: string,
   jwks: { keys: JWK[] },
   opts: {

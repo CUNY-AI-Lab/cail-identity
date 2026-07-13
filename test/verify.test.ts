@@ -1,13 +1,13 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { SignJWT, base64url, type JSONWebKeySet } from "jose";
-import { verifyIdentityJwtV2 } from "../src/index.js";
+import { verifyIdentityJwt } from "../src/index.js";
 import {
   encodeJson,
   makeRsaFixture,
   mintRsaJwt,
   signRawRsaPayload,
   type RsaFixture,
-} from "./v2-fixtures.js";
+} from "./fixtures.js";
 
 const NOW = 1_000_000;
 const ISS = "https://tools.ailab.gc.cuny.edu/cail-sso";
@@ -40,14 +40,14 @@ async function verify(
   jwks: unknown = oldKey.jwks,
   opts: unknown = OPTS,
 ) {
-  return verifyIdentityJwtV2(
+  return verifyIdentityJwt(
     token,
     jwks as JSONWebKeySet,
     opts as typeof OPTS,
   );
 }
 
-describe("verifyIdentityJwtV2 happy path and output", () => {
+describe("verifyIdentityJwt happy path and output", () => {
   it("accepts a minimal RS256 token and returns the canonical identity shape", async () => {
     const result = await verify(await mintRsaJwt(claims(), oldKey));
     expect(result).toEqual({
@@ -89,7 +89,7 @@ describe("verifyIdentityJwtV2 happy path and output", () => {
   });
 });
 
-describe("verifyIdentityJwtV2 structure, encoding, and JSON", () => {
+describe("verifyIdentityJwt structure, encoding, and JSON", () => {
   it.each(["", "a.b", "a.b.c.d", "a.*.c"])("rejects malformed compact JWT %j", async (token) => {
     expect(await verify(token)).toBeNull();
   });
@@ -138,7 +138,7 @@ describe("verifyIdentityJwtV2 structure, encoding, and JSON", () => {
   });
 });
 
-describe("verifyIdentityJwtV2 algorithm and key selection", () => {
+describe("verifyIdentityJwt algorithm and key selection", () => {
   it.each([undefined, "", 7])("rejects missing or invalid kid %j", async (kid) => {
     const token = await mintRsaJwt(claims(), oldKey, { kid });
     expect(await verify(token)).toBeNull();
@@ -206,17 +206,17 @@ describe("verifyIdentityJwtV2 algorithm and key selection", () => {
   });
 });
 
-describe("verifyIdentityJwtV2 audience, issuer, and subject", () => {
+describe("verifyIdentityJwt audience, issuer, and subject", () => {
   it.each([
-    undefined,
-    "",
-    "other",
-    [],
-    ["other"],
-    [AUD, AUD],
-    [AUD, ""],
-    [AUD, 7],
-  ])("rejects malformed or unauthorized audience %j", async (aud) => {
+    { aud: undefined },
+    { aud: "" },
+    { aud: "other" },
+    { aud: [] },
+    { aud: ["other"] },
+    { aud: [AUD, AUD] },
+    { aud: [AUD, ""] },
+    { aud: [AUD, 7] },
+  ])("rejects malformed or unauthorized audience $aud", async ({ aud }) => {
     const value = claims({ aud }) as Record<string, unknown>;
     if (aud === undefined) delete value.aud;
     expect(await verify(await mintRsaJwt(value, oldKey))).toBeNull();
@@ -235,7 +235,7 @@ describe("verifyIdentityJwtV2 audience, issuer, and subject", () => {
   });
 });
 
-describe("verifyIdentityJwtV2 time and options", () => {
+describe("verifyIdentityJwt time and options", () => {
   it("enforces exp and nbf with the default 60-second tolerance", async () => {
     expect(await verify(await mintRsaJwt(claims({ exp: NOW - 60 }), oldKey))).toBeNull();
     expect(await verify(await mintRsaJwt(claims({ exp: NOW - 59 }), oldKey))).not.toBeNull();
@@ -277,7 +277,7 @@ describe("verifyIdentityJwtV2 time and options", () => {
   });
 });
 
-describe("verifyIdentityJwtV2 own-property and fail-closed behavior", () => {
+describe("verifyIdentityJwt own-property and fail-closed behavior", () => {
   it("does not source required claims or key metadata from prototypes", async () => {
     const token = await mintRsaJwt(claims(), oldKey);
     const inheritedKid = Object.create(oldKey.publicJwk) as Record<string, unknown>;

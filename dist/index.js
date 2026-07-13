@@ -46,7 +46,7 @@ function isCanonicalBase64url(value) {
         return false;
     }
 }
-function inspectCailJwtV2(token) {
+function inspectCailJwt(token) {
     const parts = token.split(".");
     if (parts.length !== 3)
         return null;
@@ -108,7 +108,7 @@ function isRsaVerificationJwkForKid(value, kid) {
     return (isCanonicalBase64url(ownProp(value, "n")) &&
         isCanonicalBase64url(ownProp(value, "e")));
 }
-async function verifyIdentityJwtV2Internal(token, jwks, opts) {
+async function verifyIdentityJwtInternal(token, jwks, opts) {
     if (typeof token !== "string" || !isPlainObject(jwks) || !isPlainObject(opts)) {
         return null;
     }
@@ -132,7 +132,7 @@ async function verifyIdentityJwtV2Internal(token, jwks, opts) {
         !keys.every((key) => isPlainObject(key))) {
         return null;
     }
-    const inspected = inspectCailJwtV2(token);
+    const inspected = inspectCailJwt(token);
     if (!inspected)
         return null;
     const kid = ownProp(inspected.header, "kid");
@@ -189,9 +189,9 @@ async function verifyIdentityJwtV2Internal(token, jwks, opts) {
  * Verify a CAIL RS256 identity JWT against an in-memory public JWKS.
  * Any malformed, unauthorized, unsupported, or ambiguous input returns null.
  */
-export async function verifyIdentityJwtV2(token, jwks, opts) {
+export async function verifyIdentityJwt(token, jwks, opts) {
     try {
-        return await verifyIdentityJwtV2Internal(token, jwks, opts);
+        return await verifyIdentityJwtInternal(token, jwks, opts);
     }
     catch {
         return null;

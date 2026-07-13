@@ -53,7 +53,7 @@ interface InspectedJwt {
   payload: Record<string, unknown>;
 }
 
-export interface VerifyIdentityJwtV2Options {
+export interface VerifyIdentityJwtOptions {
   /** Required audience value. The token audience may be a scalar or array. */
   expectedAudience: string;
   /** Required exact-match issuer allowlist. */
@@ -74,7 +74,7 @@ function isCanonicalBase64url(value: unknown): value is string {
   }
 }
 
-function inspectCailJwtV2(token: string): InspectedJwt | null {
+function inspectCailJwt(token: string): InspectedJwt | null {
   const parts = token.split(".");
   if (parts.length !== 3) return null;
 
@@ -145,10 +145,10 @@ function isRsaVerificationJwkForKid(
   );
 }
 
-async function verifyIdentityJwtV2Internal(
+async function verifyIdentityJwtInternal(
   token: string,
   jwks: JSONWebKeySet,
-  opts: VerifyIdentityJwtV2Options,
+  opts: VerifyIdentityJwtOptions,
 ): Promise<CailIdentity | null> {
   if (typeof token !== "string" || !isPlainObject(jwks) || !isPlainObject(opts)) {
     return null;
@@ -178,7 +178,7 @@ async function verifyIdentityJwtV2Internal(
     return null;
   }
 
-  const inspected = inspectCailJwtV2(token);
+  const inspected = inspectCailJwt(token);
   if (!inspected) return null;
 
   const kid = ownProp(inspected.header, "kid") as string;
@@ -236,13 +236,13 @@ async function verifyIdentityJwtV2Internal(
  * Verify a CAIL RS256 identity JWT against an in-memory public JWKS.
  * Any malformed, unauthorized, unsupported, or ambiguous input returns null.
  */
-export async function verifyIdentityJwtV2(
+export async function verifyIdentityJwt(
   token: string,
   jwks: JSONWebKeySet,
-  opts: VerifyIdentityJwtV2Options,
+  opts: VerifyIdentityJwtOptions,
 ): Promise<CailIdentity | null> {
   try {
-    return await verifyIdentityJwtV2Internal(token, jwks, opts);
+    return await verifyIdentityJwtInternal(token, jwks, opts);
   } catch {
     return null;
   }

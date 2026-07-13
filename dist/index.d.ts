@@ -26,7 +26,7 @@ export interface CailIdentity {
 export declare const CAIL_CANONICAL_ISSUER = "https://tools.ailab.gc.cuny.edu/cail-sso";
 /** Staging issuer — list it in `allowedIssuers` to accept staging. */
 export declare const CAIL_STAGING_ISSUER = "https://tools.cuny.qzz.io/cail-sso";
-export interface VerifyIdentityJwtV2Options {
+export interface VerifyIdentityJwtOptions {
     /** Required audience value. The token audience may be a scalar or array. */
     expectedAudience: string;
     /** Required exact-match issuer allowlist. */
@@ -40,5 +40,5 @@ export interface VerifyIdentityJwtV2Options {
  * Verify a CAIL RS256 identity JWT against an in-memory public JWKS.
  * Any malformed, unauthorized, unsupported, or ambiguous input returns null.
  */
-export declare function verifyIdentityJwtV2(token: string, jwks: JSONWebKeySet, opts: VerifyIdentityJwtV2Options): Promise<CailIdentity | null>;
+export declare function verifyIdentityJwt(token: string, jwks: JSONWebKeySet, opts: VerifyIdentityJwtOptions): Promise<CailIdentity | null>;
 //# sourceMappingURL=index.d.ts.map
