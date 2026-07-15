@@ -2,7 +2,7 @@
  * @cuny-ai-lab/cail-identity — the CAIL identity-JWT verifier.
  *
  * Pure async verification for gateway-signed RS256 CAIL identity JWTs using an
- * in-memory public JWKS. Returns a normalized identity, or `null` on ANY
+ * in-memory public JWKS. Returns a fixed identity shape, or `null` on ANY
  * failure.
  *
  * Design contract (see README):
@@ -27,9 +27,9 @@ export declare const CAIL_CANONICAL_ISSUER = "https://tools.ailab.gc.cuny.edu/ca
 /** Staging issuer — list it in `allowedIssuers` to accept staging. */
 export declare const CAIL_STAGING_ISSUER = "https://tools.cuny.qzz.io/cail-sso";
 export interface VerifyIdentityJwtOptions {
-    /** Required audience value. The token audience may be a scalar or array. */
+    /** Required scalar audience value. */
     expectedAudience: string;
-    /** Required exact-match issuer allowlist. */
+    /** Required exact-match issuer list containing exactly one value. */
     allowedIssuers: string[];
     /** Unix seconds "now". Default: Math.floor(Date.now() / 1000). */
     now?: number;

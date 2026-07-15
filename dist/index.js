@@ -2,7 +2,7 @@
  * @cuny-ai-lab/cail-identity — the CAIL identity-JWT verifier.
  *
  * Pure async verification for gateway-signed RS256 CAIL identity JWTs using an
- * in-memory public JWKS. Returns a normalized identity, or `null` on ANY
+ * in-memory public JWKS. Returns a fixed identity shape, or `null` on ANY
  * failure.
  *
  * Design contract (see README):
@@ -82,10 +82,8 @@ function isUniqueNonemptyStringArray(value) {
     }
     return new Set(value).size === value.length;
 }
-function hasExpectedAudience(value, expected) {
-    if (typeof value === "string")
-        return value !== "" && value === expected;
-    return isUniqueNonemptyStringArray(value) && value.includes(expected);
+function hasExactAudience(value, expected) {
+    return typeof value === "string" && value !== "" && value === expected;
 }
 function isRsaVerificationJwkForKid(value, kid) {
     if (ownProp(value, "kty") !== "RSA" || ownProp(value, "kid") !== kid) {
@@ -117,8 +115,11 @@ async function verifyIdentityJwtInternal(token, jwks, opts) {
     if (typeof expectedAudience !== "string" || expectedAudience === "") {
         return null;
     }
-    if (!isUniqueNonemptyStringArray(allowedIssuers))
+    if (!isUniqueNonemptyStringArray(allowedIssuers) ||
+        allowedIssuers.length !== 1) {
         return null;
+    }
+    const expectedIssuer = allowedIssuers[0];
     const nowOption = ownProp(opts, "now");
     const now = nowOption === undefined ? Math.floor(Date.now() / 1000) : nowOption;
     if (!isFiniteNumber(now))
@@ -146,11 +147,11 @@ async function verifyIdentityJwtInternal(token, jwks, opts) {
     const sub = ownProp(inspected.payload, "sub");
     if (!isFiniteNumber(exp))
         return null;
-    if (!hasExpectedAudience(aud, expectedAudience))
+    if (!hasExactAudience(aud, expectedAudience))
         return null;
     if (typeof iss !== "string" ||
         iss === "" ||
-        !allowedIssuers.includes(iss)) {
+        iss !== expectedIssuer) {
         return null;
     }
     if (nbf !== undefined && !isFiniteNumber(nbf))
@@ -164,7 +165,7 @@ async function verifyIdentityJwtInternal(token, jwks, opts) {
         await jwtVerify(token, key, {
             algorithms: ["RS256"],
             audience: expectedAudience,
-            issuer: allowedIssuers,
+            issuer: expectedIssuer,
             requiredClaims: ["exp", "sub"],
             clockTolerance: tolerance,
             currentDate: new Date(now * 1000),

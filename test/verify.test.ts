@@ -76,10 +76,8 @@ describe("verifyIdentityJwt happy path and output", () => {
     });
   });
 
-  it("accepts scalar and unique-array audiences containing the expected value", async () => {
-    for (const aud of [AUD, [AUD], ["service-a", AUD, "service-b"]]) {
-      expect(await verify(await mintRsaJwt(claims({ aud }), oldKey))).not.toBeNull();
-    }
+  it("accepts the exact scalar service audience", async () => {
+    expect(await verify(await mintRsaJwt(claims(), oldKey))).not.toBeNull();
   });
 
   it("accepts either key during a distinct-kid rotation overlap", async () => {
@@ -222,10 +220,36 @@ describe("verifyIdentityJwt audience, issuer, and subject", () => {
     expect(await verify(await mintRsaJwt(value, oldKey))).toBeNull();
   });
 
+  it.each([
+    { aud: [AUD] },
+    { aud: ["service-a", AUD, "service-b"] },
+  ])(
+    "rejects array audience $aud even when it contains the service audience",
+    async ({ aud }) => {
+      expect(await verify(await mintRsaJwt(claims({ aud }), oldKey))).toBeNull();
+    },
+  );
+
   it.each([undefined, "", OTHER_ISS, 7])("rejects issuer %j", async (iss) => {
     const value = claims({ iss }) as Record<string, unknown>;
     if (iss === undefined) delete value.iss;
     expect(await verify(await mintRsaJwt(value, oldKey))).toBeNull();
+  });
+
+  it.each([
+    `${ISS}/`,
+    `${ISS}.evil.example`,
+    `https://evil.example/${ISS}`,
+    ISS.toUpperCase(),
+  ])("rejects issuer near-miss %j", async (iss) => {
+    expect(await verify(await mintRsaJwt(claims({ iss }), oldKey))).toBeNull();
+  });
+
+  it("rejects multiple configured issuers even when the token matches one", async () => {
+    const opts = { ...OPTS, allowedIssuers: [ISS, OTHER_ISS] };
+    expect(
+      await verify(await mintRsaJwt(claims(), oldKey), oldKey.jwks, opts),
+    ).toBeNull();
   });
 
   it.each([undefined, "", 7])("rejects subject %j", async (sub) => {
@@ -298,7 +322,7 @@ describe("verifyIdentityJwt own-property and fail-closed behavior", () => {
     const hostileJwks = Object.defineProperty({}, "keys", { get: throwing });
     const hostileOpts = new Proxy(OPTS, { getOwnPropertyDescriptor: throwing });
     const poisonedIssuers = [ISS];
-    (poisonedIssuers as unknown as Record<string, unknown>).includes =
+    (poisonedIssuers as unknown as Record<string, unknown>).every =
       "not a function";
 
     await expect(verify(token, hostileJwks)).resolves.toBeNull();

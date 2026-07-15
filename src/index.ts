@@ -2,7 +2,7 @@
  * @cuny-ai-lab/cail-identity — the CAIL identity-JWT verifier.
  *
  * Pure async verification for gateway-signed RS256 CAIL identity JWTs using an
- * in-memory public JWKS. Returns a normalized identity, or `null` on ANY
+ * in-memory public JWKS. Returns a fixed identity shape, or `null` on ANY
  * failure.
  *
  * Design contract (see README):
@@ -54,9 +54,9 @@ interface InspectedJwt {
 }
 
 export interface VerifyIdentityJwtOptions {
-  /** Required audience value. The token audience may be a scalar or array. */
+  /** Required scalar audience value. */
   expectedAudience: string;
-  /** Required exact-match issuer allowlist. */
+  /** Required exact-match issuer list containing exactly one value. */
   allowedIssuers: string[];
   /** Unix seconds "now". Default: Math.floor(Date.now() / 1000). */
   now?: number;
@@ -107,9 +107,8 @@ function isUniqueNonemptyStringArray(value: unknown): value is string[] {
   return new Set(value).size === value.length;
 }
 
-function hasExpectedAudience(value: unknown, expected: string): boolean {
-  if (typeof value === "string") return value !== "" && value === expected;
-  return isUniqueNonemptyStringArray(value) && value.includes(expected);
+function hasExactAudience(value: unknown, expected: string): boolean {
+  return typeof value === "string" && value !== "" && value === expected;
 }
 
 function isRsaVerificationJwkForKid(
@@ -159,7 +158,13 @@ async function verifyIdentityJwtInternal(
   if (typeof expectedAudience !== "string" || expectedAudience === "") {
     return null;
   }
-  if (!isUniqueNonemptyStringArray(allowedIssuers)) return null;
+  if (
+    !isUniqueNonemptyStringArray(allowedIssuers) ||
+    allowedIssuers.length !== 1
+  ) {
+    return null;
+  }
+  const expectedIssuer = allowedIssuers[0]!;
 
   const nowOption = ownProp(opts, "now");
   const now =
@@ -193,11 +198,11 @@ async function verifyIdentityJwtInternal(
   const nbf = ownProp(inspected.payload, "nbf");
   const sub = ownProp(inspected.payload, "sub");
   if (!isFiniteNumber(exp)) return null;
-  if (!hasExpectedAudience(aud, expectedAudience)) return null;
+  if (!hasExactAudience(aud, expectedAudience)) return null;
   if (
     typeof iss !== "string" ||
     iss === "" ||
-    !allowedIssuers.includes(iss)
+    iss !== expectedIssuer
   ) {
     return null;
   }
@@ -210,7 +215,7 @@ async function verifyIdentityJwtInternal(
     await jwtVerify(token, key, {
       algorithms: ["RS256"],
       audience: expectedAudience,
-      issuer: allowedIssuers,
+      issuer: expectedIssuer,
       requiredClaims: ["exp", "sub"],
       clockTolerance: tolerance,
       currentDate: new Date(now * 1000),
