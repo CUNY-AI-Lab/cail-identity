@@ -149,8 +149,12 @@ export const TEST_SUBJECTS = {
  * Create an in-memory RS256 test identity issuer: a fresh keypair, its public
  * JWKS, and a `mintIdentityJwt` that signs identity JWTs verifiable with that
  * JWKS via `verifyIdentityJwt`. Defaults mint a VALID token (canonical
- * subject, canonical issuer); every claim can be overridden to drive the
- * verifier's fail-closed paths.
+ * subject, canonical issuer); every payload claim can be overridden — typed
+ * options for the common ones (`authTime`, `notBefore`, array `audience`)
+ * plus arbitrary set/omit via `claims` — to drive the verifier's fail-closed
+ * paths with tokens signed by a REAL key the JWKS advertises. What it will
+ * never mint: `alg:"none"`, non-RS256 algorithms, or wrong-key signatures —
+ * those are malformed by construction and stay consumer-local.
  *
  * Keys are generated per call and never persisted — nothing here is secret or
  * reusable outside the test process.
@@ -178,24 +182,44 @@ export async function createTestIdentityIssuer(options) {
             if (typeof mint !== "object" || mint === null) {
                 throw new TypeError("mintIdentityJwt requires an options object.");
             }
-            if (typeof mint.audience !== "string" || mint.audience === "") {
-                throw new TypeError("mintIdentityJwt requires a non-empty `audience` (the `aud` your verifier expects).");
+            const audienceOk = (typeof mint.audience === "string" && mint.audience !== "") ||
+                (Array.isArray(mint.audience) &&
+                    mint.audience.every((entry) => typeof entry === "string"));
+            if (!audienceOk) {
+                throw new TypeError("mintIdentityJwt requires `audience`: a non-empty string (the `aud` your verifier expects) or a string array (the array-`aud` shape verifiers must reject).");
+            }
+            if (mint.claims !== undefined &&
+                (typeof mint.claims !== "object" ||
+                    mint.claims === null ||
+                    Array.isArray(mint.claims))) {
+                throw new TypeError("mintIdentityJwt `claims` must be a plain object of claim overrides.");
             }
             const now = mint.now ?? Math.floor(Date.now() / 1000);
-            const jwt = new SignJWT({
+            const payload = {
+                iss: mint.issuer ?? issuer,
+                aud: mint.audience,
+                sub: mint.subject ?? TEST_SUBJECTS.alice,
+                iat: now,
+                exp: now + (mint.expiresInSeconds ?? 3600),
                 ...(mint.email !== undefined ? { email: mint.email } : {}),
                 ...(mint.name !== undefined ? { name: mint.name } : {}),
                 ...(mint.entitlements !== undefined
                     ? { entitlements: mint.entitlements }
                     : {}),
-            })
+                ...(mint.authTime !== undefined ? { auth_time: mint.authTime } : {}),
+                ...(mint.notBefore !== undefined ? { nbf: mint.notBefore } : {}),
+            };
+            if (mint.claims !== undefined) {
+                for (const [claim, value] of Object.entries(mint.claims)) {
+                    if (value === undefined)
+                        delete payload[claim];
+                    else
+                        payload[claim] = value;
+                }
+            }
+            return new SignJWT(payload)
                 .setProtectedHeader({ alg: "RS256", kid, typ: "JWT" })
-                .setIssuer(mint.issuer ?? issuer)
-                .setAudience(mint.audience)
-                .setSubject(mint.subject ?? TEST_SUBJECTS.alice)
-                .setIssuedAt(now)
-                .setExpirationTime(now + (mint.expiresInSeconds ?? 3600));
-            return jwt.sign(privateKey);
+                .sign(privateKey);
         },
     };
 }

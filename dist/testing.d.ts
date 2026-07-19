@@ -49,8 +49,10 @@ export declare const TEST_SUBJECTS: {
     readonly carol: string;
 };
 export interface MintTestIdentityJwtOptions {
-    /** `aud` claim — pass the audience your verifier expects. */
-    audience: string;
+    /** `aud` claim — a string is the well-formed shape verifiers accept; a
+     * string ARRAY (even one-element) mints the array-`aud` shape CAIL
+     * verifiers must reject, signed by the same key the JWKS advertises. */
+    audience: string | string[];
     /** `sub` claim. Default: {@link TEST_SUBJECTS}.alice. Any string is allowed
      * so fail-closed paths (non-canonical subjects) can be exercised too. */
     subject?: string;
@@ -66,6 +68,20 @@ export interface MintTestIdentityJwtOptions {
     now?: number;
     /** Lifetime in seconds; `exp = now + expiresInSeconds`. Default 3600. */
     expiresInSeconds?: number;
+    /** Optional `auth_time` claim (unix seconds) for session-binding contracts
+     * (e.g. the gateway keys facade requires it). */
+    authTime?: number;
+    /** Optional `nbf` claim (unix seconds) for not-yet-valid negatives. */
+    notBefore?: number;
+    /**
+     * Arbitrary PAYLOAD claim overrides, applied last: set any registered or
+     * custom claim, or pass `undefined` as a value to OMIT a claim the other
+     * options would have set (e.g. `{ exp: undefined }` mints a token with no
+     * `exp`). Payload only — the protected header stays
+     * `{ alg: "RS256", kid, typ: "JWT" }`; genuinely malformed shapes
+     * (alg tampering, wrong-key signatures) are intentionally out of scope.
+     */
+    claims?: Record<string, unknown>;
 }
 export interface TestIdentityIssuer {
     /** The key id present in both the JWKS and every minted token header. */
@@ -83,8 +99,12 @@ export interface TestIdentityIssuer {
  * Create an in-memory RS256 test identity issuer: a fresh keypair, its public
  * JWKS, and a `mintIdentityJwt` that signs identity JWTs verifiable with that
  * JWKS via `verifyIdentityJwt`. Defaults mint a VALID token (canonical
- * subject, canonical issuer); every claim can be overridden to drive the
- * verifier's fail-closed paths.
+ * subject, canonical issuer); every payload claim can be overridden — typed
+ * options for the common ones (`authTime`, `notBefore`, array `audience`)
+ * plus arbitrary set/omit via `claims` — to drive the verifier's fail-closed
+ * paths with tokens signed by a REAL key the JWKS advertises. What it will
+ * never mint: `alg:"none"`, non-RS256 algorithms, or wrong-key signatures —
+ * those are malformed by construction and stay consumer-local.
  *
  * Keys are generated per call and never persisted — nothing here is secret or
  * reusable outside the test process.

@@ -206,6 +206,31 @@ same shape `deriveCailSubject` emits. It is unsalted and test-only — never a
 pseudonymization function. The subpath is additive test support: the runtime
 entry never imports it, and it imports no test framework.
 
+`mintIdentityJwt` can also mint well-formed-but-edge-case tokens — signed by
+the same real key the kit's JWKS advertises — so verifier negatives don't need
+consumer-local signers:
+
+```ts
+// auth_time (session-binding contracts, e.g. the gateway keys facade).
+await issuer.mintIdentityJwt({ audience: AUD, authTime: now });
+
+// nbf (not-yet-valid negatives).
+await issuer.mintIdentityJwt({ audience: AUD, notBefore: now + 3600 });
+
+// Array-valued aud — a shape CAIL verifiers must REJECT.
+await issuer.mintIdentityJwt({ audience: [AUD] });
+
+// Arbitrary payload claim overrides: set any claim, or `undefined` to omit.
+await issuer.mintIdentityJwt({
+  audience: AUD,
+  claims: { acr: "custom", exp: undefined },
+});
+```
+
+The kit signs REAL RS256 tokens only. It will never mint `alg:"none"`,
+non-RS256 algorithms, or wrong-key signatures — genuinely malformed shapes
+stay consumer-local by design.
+
 ## Development
 
 ```bash
