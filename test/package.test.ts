@@ -44,8 +44,11 @@ describe("published package entry", () => {
     expect(CAIL_STAGING_ISSUER).toBe("https://tools.cuny.qzz.io/cail-sso");
   });
 
-  it("keeps public git installation as the only configured distribution path", () => {
-    expect(packageMetadata).not.toHaveProperty("publishConfig");
+  it("publishes to GitHub Packages under the @cuny-ai-lab scope", () => {
+    expect(packageMetadata.publishConfig).toEqual({
+      registry: "https://npm.pkg.github.com",
+      access: "restricted",
+    });
     expect(packageMetadata.repository).toEqual({
       type: "git",
       url: "git+https://github.com/CUNY-AI-Lab/cail-identity.git",
