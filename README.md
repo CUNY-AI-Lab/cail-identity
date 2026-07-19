@@ -152,6 +152,42 @@ are the shared contract.
 This package does not provide sessions, CAIL API keys, model routing, quotas,
 or custom error handling.
 
+## Test fixtures (`@cuny-ai-lab/cail-identity/testing`)
+
+Consumers used to invent structurally invalid subjects in tests
+(`cail-abc123`, `user:${email}`), which broke when canonical-subject
+enforcement arrived. Build fixtures from the blessed subpath instead:
+
+```ts
+import {
+  TEST_SUBJECTS,
+  canonicalTestSubject,
+  createTestIdentityIssuer,
+} from "@cuny-ai-lab/cail-identity/testing";
+
+// Deterministic canonical subjects — no hand-maintained hex literals.
+const owner = canonicalTestSubject("owner");          // cail-<32 lowercase hex>
+const other = TEST_SUBJECTS.bob;                      // ready-made, distinct
+
+// An in-memory RS256 issuer whose tokens verify via verifyIdentityJwt.
+const issuer = await createTestIdentityIssuer();
+const jwt = await issuer.mintIdentityJwt({
+  audience: "cail:agent-studio",
+  subject: owner,
+  email: "owner@gc.cuny.edu",
+});
+const identity = await verifyIdentityJwt(jwt, issuer.jwks, {
+  expectedAudience: "cail:agent-studio",
+  allowedIssuers: [issuer.issuer],
+});
+```
+
+`canonicalTestSubject(seed)` is `cail-` + the first 32 lowercase hex
+characters of SHA-256(seed): deterministic, distinct per seed, and always the
+same shape `deriveCailSubject` emits. It is unsalted and test-only — never a
+pseudonymization function. The subpath is additive test support: the runtime
+entry never imports it, and it imports no test framework.
+
 ## Development
 
 ```bash
