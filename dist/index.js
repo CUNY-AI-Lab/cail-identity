@@ -94,6 +94,47 @@ export async function deriveCailSubject(options) {
     const digest = new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(`${options.issuer}|${canonical}`)));
     return `cail-${bytesToHex(digest).slice(0, 32)}`;
 }
+/**
+ * Stable pseudonymous app-principal identifier (ADR-0007).
+ *
+ * App principals are headless applications with their own spend partition.
+ * The `app-` prefix is disjoint from the user `cail-` prefix by construction,
+ * so an app subject can never collide with a user subject in a spend
+ * partition, an audit row, or a workspace key.
+ */
+export const APP_SUBJECT_PATTERN = /^app-[0-9a-f]{32}$/;
+/** True only for the canonical stable CAIL app-principal subject. */
+export function isAppSubject(value) {
+    return typeof value === "string" && APP_SUBJECT_PATTERN.test(value);
+}
+/**
+ * Derive the stable pseudonymous CAIL app-principal subject (ADR-0007).
+ *
+ * `app-` + the first 32 hexadecimal characters of
+ * HMAC-SHA256(subjectSalt, `app|${appId}`).
+ *
+ * The same HMAC construction as the user subject, namespaced by the literal
+ * `app|` domain-separation prefix and the disjoint `app-` output prefix. The
+ * app id is a stable control-plane identifier chosen by a trusted issuing
+ * service (never user-controlled request data) and is used byte-exact — no
+ * canonicalization, because there is no upstream-IdP quirk to absorb.
+ */
+export async function deriveAppSubject(appId, subjectSalt) {
+    if (typeof appId !== "string" ||
+        appId === "" ||
+        CONTROL_CHARACTER.test(appId) ||
+        appId.replace(ASCII_WHITESPACE, "") !== appId) {
+        throw new TypeError("appId must be a non-empty string without control characters or edge whitespace.");
+    }
+    if (typeof subjectSalt !== "string" ||
+        subjectSalt === "" ||
+        CONTROL_CHARACTER.test(subjectSalt)) {
+        throw new TypeError("subjectSalt must be a non-empty string without controls.");
+    }
+    const key = await crypto.subtle.importKey("raw", encoder.encode(subjectSalt), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    const digest = new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(`app|${appId}`)));
+    return `app-${bytesToHex(digest).slice(0, 32)}`;
+}
 /** Canonical production issuer — list it in `allowedIssuers` to accept prod. */
 export const CAIL_CANONICAL_ISSUER = "https://tools.ailab.gc.cuny.edu/cail-sso";
 /** Staging issuer — list it in `allowedIssuers` to accept staging. */

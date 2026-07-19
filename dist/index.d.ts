@@ -59,6 +59,30 @@ export interface DeriveCailSubjectOptions {
  * HMAC-SHA256(subjectSalt, `${issuer}|${canonicalSubject}`).
  */
 export declare function deriveCailSubject(options: DeriveCailSubjectOptions): Promise<string>;
+/**
+ * Stable pseudonymous app-principal identifier (ADR-0007).
+ *
+ * App principals are headless applications with their own spend partition.
+ * The `app-` prefix is disjoint from the user `cail-` prefix by construction,
+ * so an app subject can never collide with a user subject in a spend
+ * partition, an audit row, or a workspace key.
+ */
+export declare const APP_SUBJECT_PATTERN: RegExp;
+/** True only for the canonical stable CAIL app-principal subject. */
+export declare function isAppSubject(value: unknown): value is string;
+/**
+ * Derive the stable pseudonymous CAIL app-principal subject (ADR-0007).
+ *
+ * `app-` + the first 32 hexadecimal characters of
+ * HMAC-SHA256(subjectSalt, `app|${appId}`).
+ *
+ * The same HMAC construction as the user subject, namespaced by the literal
+ * `app|` domain-separation prefix and the disjoint `app-` output prefix. The
+ * app id is a stable control-plane identifier chosen by a trusted issuing
+ * service (never user-controlled request data) and is used byte-exact — no
+ * canonicalization, because there is no upstream-IdP quirk to absorb.
+ */
+export declare function deriveAppSubject(appId: string, subjectSalt: string): Promise<string>;
 /** Canonical production issuer — list it in `allowedIssuers` to accept prod. */
 export declare const CAIL_CANONICAL_ISSUER = "https://tools.ailab.gc.cuny.edu/cail-sso";
 /** Staging issuer — list it in `allowedIssuers` to accept staging. */

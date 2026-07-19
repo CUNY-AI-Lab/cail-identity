@@ -3,7 +3,9 @@ import { readFile } from "node:fs/promises";
 import {
   CAIL_CANONICAL_ISSUER,
   CAIL_STAGING_ISSUER,
+  deriveAppSubject,
   deriveCailSubject,
+  isAppSubject,
   isCailSubject,
   verifyIdentityJwt,
 } from "@cuny-ai-lab/cail-identity";
@@ -38,6 +40,8 @@ describe("published package entry", () => {
     expect(verifyIdentityJwt).toBeTypeOf("function");
     expect(deriveCailSubject).toBeTypeOf("function");
     expect(isCailSubject).toBeTypeOf("function");
+    expect(deriveAppSubject).toBeTypeOf("function");
+    expect(isAppSubject).toBeTypeOf("function");
     expect(CAIL_CANONICAL_ISSUER).toBe(
       "https://tools.ailab.gc.cuny.edu/cail-sso",
     );

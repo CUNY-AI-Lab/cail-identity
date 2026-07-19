@@ -51,6 +51,24 @@ This function does not authenticate its input. Call it only with a subject
 obtained from a verified CUNY token or trusted user-info response. The salt is a
 server secret. The issuer namespaces otherwise identical subjects.
 
+## Stable app-principal subject (ADR-0007)
+
+```ts
+import { deriveAppSubject, isAppSubject } from "@cuny-ai-lab/cail-identity";
+
+const appSubject = await deriveAppSubject(appControlPlaneId, APP_SUBJECT_SALT);
+```
+
+Headless apps with their own spend partition get `app-` + the first 32
+lowercase hexadecimal characters of `HMAC-SHA256(subjectSalt, "app|" + appId)`
+— the same construction as the user subject, namespaced by the `app|`
+domain-separation prefix. The disjoint `app-` output prefix
+(`APP_SUBJECT_PATTERN`, `isAppSubject`) means an app subject can never collide
+with a user `cail-` subject in a spend partition, audit row, or workspace key.
+The app id is a stable control-plane identifier used byte-exact (no
+canonicalization) and must come from a trusted issuing service, never from
+user-controlled request data.
+
 ## Signed identity
 
 ```ts

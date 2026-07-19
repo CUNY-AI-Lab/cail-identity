@@ -1,6 +1,6 @@
 {
   "name": "@cuny-ai-lab/cail-identity",
-  "version": "4.2.0",
+  "version": "4.3.0",
   "description": "CAIL stable pseudonymous subject derivation and RS256/JWKS identity-JWT verification.",
   "type": "module",
   "license": "MIT",
