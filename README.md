@@ -1,137 +1,102 @@
-# @cuny-ai-lab/cail-identity
+# `@cuny-ai-lab/cail-identity`
 
-Verify the gateway-signed RS256 CAIL identity JWT from
-`X-CAIL-Identity-JWT`. The verifier takes a trusted in-memory public JWKS and
-the service audience, then returns a fixed identity shape or `null`.
+The shared stable-subject and signed-identity contract for CAIL applications.
+It runs on Web Crypto in Cloudflare Workers, browsers, Bun, and Node 20 or
+newer.
 
-Use this package at the CAIL fleet's authentication boundary. Signature and
-registered-claim verification are delegated to
-[`jose`](https://github.com/panva/jose), which runs on Web Crypto across
-Cloudflare Workers, browsers, Bun, and Node 20 or later. CAIL adds canonical
-base64url, fatal UTF-8, own-property claims, an RS256 algorithm pin, exact
-issuer comparison, constrained audience shapes, deterministic key selection,
-and a fail-closed `null` result.
+The package has two deliberately separate jobs:
 
-Consumers give the package a public JWKS. The RSA private key remains at the
-gateway and never enters the package.
+1. A trusted CUNY authentication boundary can derive the stable pseudonymous
+   `cail-…` subject.
+2. CAIL services can verify an RS256 identity JWT containing that subject.
 
-## Install
+Neither operation trusts request headers or user-supplied identity fields.
 
-```bash
-bun add github:CUNY-AI-Lab/cail-identity
+## Stable subject
+
+```ts
+import { deriveCailSubject } from "@cuny-ai-lab/cail-identity";
+
+const subject = await deriveCailSubject({
+  issuer: CUNY_OIDC_ISSUER,
+  oidcSubject: trustedUserInfo.sub,
+  subjectSalt: CAIL_SUBJECT_SALT,
+});
 ```
 
-Pin a reviewed commit for reproducibility.
+The established algorithm is:
 
-## Usage
+1. Trim and uppercase the trusted OIDC subject.
+2. Remove one trailing `@LOGIN.CUNY.EDU` realm.
+3. Compute `HMAC-SHA256(subjectSalt, issuer + "|" + canonicalSubject)`.
+4. Return `cail-` followed by the first 32 lowercase hexadecimal characters.
+
+This function does not authenticate its input. Call it only with a subject
+obtained from a verified CUNY token or trusted user-info response. The salt is a
+server secret. The issuer namespaces otherwise identical subjects.
+
+## Signed identity
 
 ```ts
 import {
-  verifyIdentityJwt,
   CAIL_CANONICAL_ISSUER,
+  verifyIdentityJwt,
 } from "@cuny-ai-lab/cail-identity";
 
 const identity = await verifyIdentityJwt(token, publicJwks, {
-  expectedAudience: "cail:my-service",
+  expectedAudience: "cail:agent-studio",
   allowedIssuers: [CAIL_CANONICAL_ISSUER],
 });
 
 if (!identity) return new Response("Unauthorized", { status: 401 });
 ```
 
-```ts
-verifyIdentityJwt(
-  token: string,
-  jwks: { keys: JWK[] },
-  opts: {
-    expectedAudience: string;
-    allowedIssuers: string[];
-    clockToleranceSeconds?: number;
-    now?: number;
-  },
-): Promise<CailIdentity | null>
+The result is:
 
+```ts
 type CailIdentity = {
-  subject: string;
+  subject: `cail-${string}`;
   email?: string;
   name?: string;
   entitlements: string[];
 };
 ```
 
+In the TypeScript declaration `subject` remains `string`, but runtime
+verification requires the exact pattern `^cail-[0-9a-f]{32}$`.
+
 ## Verification contract
 
-The token must have exactly three canonical base64url segments. Its protected
-header must contain `alg: "RS256"` and a nonempty string `kid`. Any `crit`
-member rejects, including an empty array. Token-supplied key lookup headers
-such as `jku` and `x5u` are never followed.
+The verifier accepts exactly one configured issuer and one scalar audience. It
+requires a canonical three-part JWT, `alg: "RS256"`, a nonempty `kid`, a finite
+`exp`, an optional finite `nbf`, and the canonical CAIL subject. Issuer and
+audience comparisons are exact and case-sensitive.
 
-Key selection considers public RSA keys with the same `kid`, usable RS256
-metadata, canonical `n` and `e`, and no private RSA parameters. Verification
-continues only when exactly one eligible key remains. Ineligible entries are
-ignored, even when they reuse the same `kid`; callers that require every JWKS
-`kid` to be globally unique must validate that before calling the verifier.
-`jose` and Web Crypto enforce the RS256 signature and RSA key requirements.
+The supplied JWKS must contain exactly one eligible public RSA verification key
+for the token's `kid`. The verifier never follows `jku`, `x5u`, or any other
+token-controlled URL. Signature and registered-claim verification use
+[`jose`](https://github.com/panva/jose).
 
-`allowedIssuers` must contain exactly one nonempty issuer. `iss` is compared
-with that value as a case-sensitive string; there is no prefix, suffix, host,
-or URL normalization. Empty or multiple-issuer configuration returns `null`,
-which keeps production and staging identity namespaces from being combined.
+Every malformed input, verification failure, configuration error, or
+unexpected exception resolves to `null`. The verifier does not expose a
+failure oracle and performs no network access, JWKS refresh, logging, or token
+minting.
 
-`aud` must be a nonempty scalar string exactly equal to `expectedAudience`.
-Array-valued audiences return `null`, including a one-element array or an array
-that contains the expected value.
+Callers own bounded JWKS loading and rotation. Publish old and new public keys
+under distinct `kid` values during an overlap, switch the signer, then remove
+the old key after issued tokens and clock tolerance have expired.
 
-Time validation requires a finite `exp`. A finite `nbf` is allowed and checked
-when present. Both checks use a symmetric 60-second clock tolerance by default.
-A present `iat` must be numeric, but the verifier does not require `iat` or use
-it to limit token age. A future numeric `iat` is accepted. The verifier also
-does not enforce `jti` replay protection or pin a `typ` value.
+## Platform role
 
-`sub` must be a nonempty string and is returned verbatim as `subject`. The
-verifier does not trim, case-fold, Unicode-normalize, or validate a CAIL subject
-format. Treat it as an opaque identifier and never substitute email as a data
-key.
+CAIL applications verify incoming identity JWTs at their own trusted boundary.
+When they call the model platform, they give the same audience-appropriate JWT
+to `@cuny-ai-lab/cail-client`. The gateway's narrow identity adapter performs
+this verification and exchanges the identity for a short-lived native LiteLLM
+key. LiteLLM and PostgreSQL then bind that key's stable subject to model access,
+spend, and budgets.
 
-`email` and `name` are returned only when they are strings. For `entitlements`,
-the verifier preserves every string in order and drops nonstrings; it does not
-trim, deduplicate, reject empty strings, or apply an authorization allowlist.
-Compare entitlement values exactly, and make authorization decisions against a
-service-owned allowlist. Unknown claims are omitted from the result.
-
-## JWKS loading and rotation
-
-The verifier performs no network access, caching, refresh, or retry. It checks
-only the JWKS snapshot supplied for that call. A malformed set, an unknown
-`kid`, no eligible matching key, multiple eligible matching keys, an import
-error, or a bad signature returns `null`.
-
-Prefer a JWKS delivered as trusted deployment configuration. If a consumer
-fetches it remotely, that consumer owns the HTTPS origin allowlist, response
-size and schema limits, cache lifetime, atomic refresh, and startup behavior.
-Never choose a JWKS URL from the token. Decide explicitly whether the consumer
-rejects all requests after a refresh failure or temporarily retains a
-last-known-good set. Retaining it also extends acceptance of a key that may
-have been revoked.
-
-Rotate by publishing old and new public keys under distinct `kid` values,
-deploying the overlap, switching the signer, and removing the old key only
-after old tokens and clock tolerance have expired. An unknown new `kid` does
-not trigger a refresh inside this package.
-
-## Failure, privacy, and deployment boundaries
-
-Every malformed input, verification failure, configuration error, hostile
-getter, and unexpected exception resolves to `null`. The package intentionally
-does not reveal a failure reason. Return a generic authentication failure and
-do not log the JWT, JWKS, email, name, or entitlements.
-
-The verifier does not limit token size or claim count. It also does not limit
-the size of an in-memory JWKS. Enforce request and header limits at the trusted
-ingress, and bound any remotely loaded JWKS before passing it in.
-
-Browser bundling supports local verification only. Enforce access to server
-data and operations in a trusted Worker or server boundary.
+This package does not provide sessions, CAIL API keys, model routing, quotas,
+or custom error handling.
 
 ## Development
 
@@ -144,16 +109,7 @@ bun audit
 ```
 
 Build output is committed so pinned git dependencies install without a build
-step. The suite tests both `src` and the package entry backed by `dist`.
-`check:dist` rebuilds the package and fails in CI if the committed output does
-not match source.
-
-## Scope
-
-The package handles signed identity validation. Callers remain responsible for
-JWKS fetching, subject derivation or canonicalization, sessions, replay policy,
-entitlement authorization, tenant isolation, quotas, origin/CSRF policy, and
-credential transport.
+step.
 
 ## License
 
