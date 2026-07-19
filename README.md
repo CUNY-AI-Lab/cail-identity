@@ -12,6 +12,22 @@ The package has two deliberately separate jobs:
 
 Neither operation trusts request headers or user-supplied identity fields.
 
+## Installation (GitHub Packages)
+
+The package is published to GitHub Packages under the `@cuny-ai-lab` scope.
+Add the registry mapping to the consuming repository's `.npmrc` (resolution
+only — never commit a token):
+
+```
+@cuny-ai-lab:registry=https://npm.pkg.github.com
+```
+
+Pin a semver range, for example `"@cuny-ai-lab/cail-identity": "^4.0.0"`, then
+run `bun install` with `NODE_AUTH_TOKEN` set in the environment to a GitHub
+PAT that has `read:packages` (supplied by a user-level `~/.npmrc` or a CI
+secret). Maintainers publish with `npm publish`; `bun publish` does not
+authenticate against GitHub Packages.
+
 ## Stable subject
 
 ```ts
@@ -113,8 +129,8 @@ bun run check:dist
 bun audit
 ```
 
-Build output is committed so pinned git dependencies install without a build
-step.
+Build output is committed and ships in the published package, so consumers
+install without a build step.
 
 ## License
 
