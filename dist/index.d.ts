@@ -29,8 +29,19 @@ export declare function isCailSubject(value: unknown): value is string;
 /**
  * Canonicalize the trusted CUNY OIDC subject used as pseudonym input.
  *
- * This preserves the established CAIL contract: trim, uppercase, and remove
- * one trailing `@LOGIN.CUNY.EDU` realm. It does not authenticate the value.
+ * OIDC Core defines `sub` as a case-sensitive opaque string; a compliant RP
+ * compares it byte-for-byte and never normalizes. CAIL normalizes for ONE
+ * documented reason: CUNYLogin is non-compliant and emits the same person as
+ * two forms (`BOB` and `bob@login.cuny.edu`). So we normalize exactly and only
+ * that quirk — ASCII whitespace trim, ASCII-only uppercase, one trailing
+ * `@LOGIN.CUNY.EDU` realm removed — and leave everything else opaque.
+ *
+ * ASCII-only is load-bearing: it must produce byte-identical output to the
+ * gate's LuaJIT `canonicalize_sub` (byte-wise `:upper()` and `%s`). A
+ * Unicode-aware `toUpperCase()`/`trim()` would (a) diverge from the gate on
+ * non-ASCII input and (b) *collide distinct people* — `ß`→`SS`, dotless `ı`→`I`,
+ * NBSP trimming — a merge far beyond the realm quirk. CUNY subjects are ASCII,
+ * so no real subject changes. It does not authenticate the value.
  */
 export declare function canonicalizeCunySubject(subject: string): string;
 export interface DeriveCailSubjectOptions {

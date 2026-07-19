@@ -52,7 +52,12 @@ describe("stable CAIL subject", () => {
     expect(() => canonicalizeCunySubject(" @login.cuny.edu ")).toThrow(
       "must not be empty",
     );
-    expect(() => canonicalizeCunySubject("bob\n")).toThrow("without controls");
+    // A trailing newline is ASCII whitespace: trimmed like the gate, not rejected.
+    expect(canonicalizeCunySubject("bob\n")).toBe("BOB");
+    // An interior control character still fails closed.
+    expect(() => canonicalizeCunySubject("bo\u0001b")).toThrow(
+      "control characters",
+    );
     await expect(
       deriveCailSubject({ ...options, issuer: "", oidcSubject: "bob" }),
     ).rejects.toThrow("issuer");
@@ -63,6 +68,28 @@ describe("stable CAIL subject", () => {
         oidcSubject: "bob",
       }),
     ).rejects.toThrow("subjectSalt");
+  });
+
+  it("normalizes ASCII-only and never collides distinct non-ASCII subjects", async () => {
+    // Canonicalization is ASCII-only, matching the gate's byte-wise LuaJIT
+    // implementation. A Unicode-aware toUpperCase would fold these into
+    // colliding subjects (ß→SS, ı→I) — merging distinct people. They must
+    // stay distinct and pass through un-uppercased.
+    expect(canonicalizeCunySubject("straße")).toBe("STRAßE");
+    expect(canonicalizeCunySubject("straße")).not.toBe(
+      canonicalizeCunySubject("strasse"),
+    );
+    expect(canonicalizeCunySubject("bıb")).toBe("BıB");
+    expect(canonicalizeCunySubject("bıb")).not.toBe(canonicalizeCunySubject("bib"));
+    // Non-ASCII whitespace (NBSP) is NOT trimmed — ASCII %s only, like the gate.
+    expect(canonicalizeCunySubject("bob\u00a0")).toBe("BOB\u00a0");
+    expect(canonicalizeCunySubject("bob\u00a0")).not.toBe(
+      canonicalizeCunySubject("bob"),
+    );
+    // Distinct derived subjects follow from distinct canonical forms.
+    const a = await deriveCailSubject({ ...options, oidcSubject: "bıb" });
+    const b = await deriveCailSubject({ ...options, oidcSubject: "bib" });
+    expect(a).not.toBe(b);
   });
 
   it("recognizes only the canonical public subject format", () => {

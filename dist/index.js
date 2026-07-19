@@ -24,18 +24,38 @@ export function isCailSubject(value) {
 }
 const CUNY_LOGIN_REALM = "@LOGIN.CUNY.EDU";
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/;
+// ASCII whitespace only — the exact set LuaJIT's `%s` pattern trims in the gate
+// (space, tab, newline, vertical tab, form feed, carriage return).
+const ASCII_WHITESPACE = /^[ \t\n\v\f\r]+|[ \t\n\v\f\r]+$/g;
 const encoder = new TextEncoder();
 /**
  * Canonicalize the trusted CUNY OIDC subject used as pseudonym input.
  *
- * This preserves the established CAIL contract: trim, uppercase, and remove
- * one trailing `@LOGIN.CUNY.EDU` realm. It does not authenticate the value.
+ * OIDC Core defines `sub` as a case-sensitive opaque string; a compliant RP
+ * compares it byte-for-byte and never normalizes. CAIL normalizes for ONE
+ * documented reason: CUNYLogin is non-compliant and emits the same person as
+ * two forms (`BOB` and `bob@login.cuny.edu`). So we normalize exactly and only
+ * that quirk — ASCII whitespace trim, ASCII-only uppercase, one trailing
+ * `@LOGIN.CUNY.EDU` realm removed — and leave everything else opaque.
+ *
+ * ASCII-only is load-bearing: it must produce byte-identical output to the
+ * gate's LuaJIT `canonicalize_sub` (byte-wise `:upper()` and `%s`). A
+ * Unicode-aware `toUpperCase()`/`trim()` would (a) diverge from the gate on
+ * non-ASCII input and (b) *collide distinct people* — `ß`→`SS`, dotless `ı`→`I`,
+ * NBSP trimming — a merge far beyond the realm quirk. CUNY subjects are ASCII,
+ * so no real subject changes. It does not authenticate the value.
  */
 export function canonicalizeCunySubject(subject) {
-    if (typeof subject !== "string" || CONTROL_CHARACTER.test(subject)) {
-        throw new TypeError("CUNY OIDC subject must be a string without controls.");
+    if (typeof subject !== "string") {
+        throw new TypeError("CUNY OIDC subject must be a string.");
     }
-    let canonical = subject.trim().toUpperCase();
+    // Trim edge ASCII whitespace first (a trailing newline is trimmed, as the
+    // gate does), then fail closed on any interior control character.
+    const trimmed = subject.replace(ASCII_WHITESPACE, "");
+    if (CONTROL_CHARACTER.test(trimmed)) {
+        throw new TypeError("CUNY OIDC subject must not contain control characters.");
+    }
+    let canonical = trimmed.replace(/[a-z]/g, (ch) => ch.toUpperCase());
     if (canonical.endsWith(CUNY_LOGIN_REALM)) {
         canonical = canonical.slice(0, -CUNY_LOGIN_REALM.length);
     }
