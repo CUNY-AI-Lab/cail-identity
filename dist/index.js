@@ -265,6 +265,56 @@ async function verifyIdentityJwtInternal(token, jwks, opts) {
     };
 }
 /**
+ * Parse and validate the identity VERIFICATION CONFIG (JWKS string + issuer).
+ *
+ * This is the canonical config-error-vs-invalid-token boundary: a token that
+ * fails validation against a successfully loaded JWKS is a CLIENT error (401,
+ * `verifyIdentityJwt` returns null), while a server that cannot load or parse
+ * its own verification config is an OPERATOR error the caller must surface as
+ * 5xx (503) with a structured log — otherwise a misconfiguration presents as
+ * every user's auth silently failing. (Precedent: Envoy JWT filter #41669.)
+ *
+ * Config-invalid is a VALUE here, never an exception: the function does not
+ * throw. Structural JWKS validation only — a well-formed JWK Set object with a
+ * `keys` array of objects. An empty `keys` array is a loaded (if useless)
+ * config; per-key selection remains `verifyIdentityJwt`'s token-validation
+ * concern and still fails closed to null.
+ */
+export function parseIdentityConfig(input) {
+    if (!isPlainObject(input))
+        return { ok: false, reason: "jwks_missing" };
+    const rawJwks = ownProp(input, "jwks");
+    if (typeof rawJwks !== "string" || rawJwks.replace(ASCII_WHITESPACE, "") === "") {
+        return { ok: false, reason: "jwks_missing" };
+    }
+    let parsed;
+    try {
+        parsed = JSON.parse(rawJwks);
+    }
+    catch {
+        return { ok: false, reason: "jwks_malformed" };
+    }
+    if (!isPlainObject(parsed))
+        return { ok: false, reason: "jwks_malformed" };
+    const keys = ownProp(parsed, "keys");
+    if (!Array.isArray(keys) ||
+        !keys.every((key) => isPlainObject(key))) {
+        return { ok: false, reason: "jwks_malformed" };
+    }
+    const issuer = ownProp(input, "issuer");
+    if (typeof issuer !== "string" || issuer === "") {
+        return { ok: false, reason: "issuer_missing" };
+    }
+    const supportedIssuers = ownProp(input, "supportedIssuers");
+    if (supportedIssuers !== undefined) {
+        if (!Array.isArray(supportedIssuers) ||
+            !supportedIssuers.includes(issuer)) {
+            return { ok: false, reason: "issuer_unsupported" };
+        }
+    }
+    return { ok: true, jwks: parsed, issuer };
+}
+/**
  * Verify a CAIL RS256 identity JWT against an in-memory public JWKS.
  * Any malformed, unauthorized, unsupported, or ambiguous input returns null.
  */

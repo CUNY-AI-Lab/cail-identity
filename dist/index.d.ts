@@ -73,6 +73,41 @@ export interface VerifyIdentityJwtOptions {
     /** Symmetric clock leeway in seconds. Default 60. */
     clockToleranceSeconds?: number;
 }
+/** Why an identity verification CONFIG failed to load. Operator error, not a token error. */
+export type IdentityConfigErrorReason = "jwks_missing" | "jwks_malformed" | "issuer_missing" | "issuer_unsupported";
+export interface ParseIdentityConfigInput {
+    /** Raw JWKS JSON string, e.g. the `CAIL_IDENTITY_JWKS` environment value. */
+    jwks: string | undefined;
+    /** Exact expected issuer, e.g. the `CAIL_IDENTITY_ISSUER` environment value. */
+    issuer: string | undefined;
+    /** Optional exact-match allowlist the configured issuer must belong to. */
+    supportedIssuers?: readonly string[];
+}
+export type ParseIdentityConfigResult = {
+    ok: true;
+    jwks: JSONWebKeySet;
+    issuer: string;
+} | {
+    ok: false;
+    reason: IdentityConfigErrorReason;
+};
+/**
+ * Parse and validate the identity VERIFICATION CONFIG (JWKS string + issuer).
+ *
+ * This is the canonical config-error-vs-invalid-token boundary: a token that
+ * fails validation against a successfully loaded JWKS is a CLIENT error (401,
+ * `verifyIdentityJwt` returns null), while a server that cannot load or parse
+ * its own verification config is an OPERATOR error the caller must surface as
+ * 5xx (503) with a structured log — otherwise a misconfiguration presents as
+ * every user's auth silently failing. (Precedent: Envoy JWT filter #41669.)
+ *
+ * Config-invalid is a VALUE here, never an exception: the function does not
+ * throw. Structural JWKS validation only — a well-formed JWK Set object with a
+ * `keys` array of objects. An empty `keys` array is a loaded (if useless)
+ * config; per-key selection remains `verifyIdentityJwt`'s token-validation
+ * concern and still fails closed to null.
+ */
+export declare function parseIdentityConfig(input: ParseIdentityConfigInput): ParseIdentityConfigResult;
 /**
  * Verify a CAIL RS256 identity JWT against an in-memory public JWKS.
  * Any malformed, unauthorized, unsupported, or ambiguous input returns null.

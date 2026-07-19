@@ -102,6 +102,39 @@ Callers own bounded JWKS loading and rotation. Publish old and new public keys
 under distinct `kid` values during an overlap, switch the signer, then remove
 the old key after issued tokens and clock tolerance have expired.
 
+## Config errors are not token errors
+
+`parseIdentityConfig` owns the other side of that boundary: loading the
+verification config itself. A token that fails against a successfully loaded
+JWKS is a client error (`verifyIdentityJwt` → `null` → 401). A service that
+cannot load or parse its own config — unset or malformed `CAIL_IDENTITY_JWKS`,
+missing or unsupported issuer — is an operator error the caller must surface
+as 503 with a structured log, or a misconfiguration presents as every user's
+auth silently failing.
+
+```ts
+import { parseIdentityConfig } from "@cuny-ai-lab/cail-identity";
+
+const config = parseIdentityConfig({
+  jwks: env.CAIL_IDENTITY_JWKS,
+  issuer: env.CAIL_IDENTITY_ISSUER,
+  supportedIssuers: [CAIL_CANONICAL_ISSUER, CAIL_STAGING_ISSUER], // optional
+});
+if (!config.ok) {
+  // config.reason: "jwks_missing" | "jwks_malformed" | "issuer_missing" | "issuer_unsupported"
+  return new Response("Service Unavailable", { status: 503 });
+}
+const identity = await verifyIdentityJwt(token, config.jwks, {
+  expectedAudience: "cail:agent-studio",
+  allowedIssuers: [config.issuer],
+});
+```
+
+The helper never throws — config-invalid is a returned value. Validation is
+structural (a JWK Set object with a `keys` array of objects); an empty `keys`
+array is a loaded config, and per-`kid` key selection remains token
+validation.
+
 ## Platform role
 
 CAIL applications verify incoming identity JWTs at their own trusted boundary.
