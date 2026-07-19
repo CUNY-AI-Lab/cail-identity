@@ -3,6 +3,8 @@ import { readFile } from "node:fs/promises";
 import {
   CAIL_CANONICAL_ISSUER,
   CAIL_STAGING_ISSUER,
+  deriveCailSubject,
+  isCailSubject,
   verifyIdentityJwt,
 } from "@cuny-ai-lab/cail-identity";
 import { makeRsaFixture, mintRsaJwt, type RsaFixture } from "./fixtures.js";
@@ -24,7 +26,7 @@ beforeAll(async () => {
 
 function claims(aud: unknown = AUD) {
   return {
-    sub: "package-subject",
+    sub: "cail-fedcba9876543210fedcba9876543210",
     aud,
     iss: CAIL_CANONICAL_ISSUER,
     exp: NOW + 3600,
@@ -34,6 +36,8 @@ function claims(aud: unknown = AUD) {
 describe("published package entry", () => {
   it("exports the canonical verifier and issuer constants", () => {
     expect(verifyIdentityJwt).toBeTypeOf("function");
+    expect(deriveCailSubject).toBeTypeOf("function");
+    expect(isCailSubject).toBeTypeOf("function");
     expect(CAIL_CANONICAL_ISSUER).toBe(
       "https://tools.ailab.gc.cuny.edu/cail-sso",
     );

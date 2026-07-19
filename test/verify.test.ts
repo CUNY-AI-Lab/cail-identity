@@ -27,7 +27,7 @@ beforeAll(async () => {
 
 function claims(over: Record<string, unknown> = {}) {
   return {
-    sub: "cail-subject-abc",
+    sub: "cail-0123456789abcdef0123456789abcdef",
     aud: AUD,
     iss: ISS,
     exp: NOW + 3600,
@@ -51,7 +51,7 @@ describe("verifyIdentityJwt happy path and output", () => {
   it("accepts a minimal RS256 token and returns the canonical identity shape", async () => {
     const result = await verify(await mintRsaJwt(claims(), oldKey));
     expect(result).toEqual({
-      subject: "cail-subject-abc",
+      subject: "cail-0123456789abcdef0123456789abcdef",
       email: undefined,
       name: undefined,
       entitlements: [],
@@ -69,7 +69,7 @@ describe("verifyIdentityJwt happy path and output", () => {
       oldKey,
     );
     expect(await verify(token)).toEqual({
-      subject: "cail-subject-abc",
+      subject: "cail-0123456789abcdef0123456789abcdef",
       email: "user@gc.cuny.edu",
       name: "Ada Lovelace",
       entitlements: ["a", "b"],
@@ -252,7 +252,15 @@ describe("verifyIdentityJwt audience, issuer, and subject", () => {
     ).toBeNull();
   });
 
-  it.each([undefined, "", 7])("rejects subject %j", async (sub) => {
+  it.each([
+    undefined,
+    "",
+    7,
+    "cail-subject",
+    "cail-0123456789ABCDEF0123456789ABCDEF",
+    "cail-0123456789abcdef0123456789abcde",
+    " cail-0123456789abcdef0123456789abcdef",
+  ])("rejects subject %j", async (sub) => {
     const value = claims({ sub }) as Record<string, unknown>;
     if (sub === undefined) delete value.sub;
     expect(await verify(await mintRsaJwt(value, oldKey))).toBeNull();

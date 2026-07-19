@@ -1,9 +1,8 @@
 /**
  * @cuny-ai-lab/cail-identity — the CAIL identity-JWT verifier.
  *
- * Pure async verification for gateway-signed RS256 CAIL identity JWTs using an
- * in-memory public JWKS. Returns a fixed identity shape, or `null` on ANY
- * failure.
+ * Pure Web Crypto helpers for the stable CAIL subject and gateway-signed
+ * RS256 CAIL identity JWTs.
  *
  * Design contract (see README):
  *   - JOSE/JWT protocol machinery is delegated to `jose`, which uses the same
@@ -12,10 +11,69 @@
  *   - Verification key material is passed in — never stored, never logged.
  *   - Fail closed: any ambiguity returns `null`. Never throws, never reveals a
  *     failure reason (no oracle).
- *   - Identity comes ONLY from a validly-signed token — no header trust, no
- *     subject derivation.
+ *   - A verified token must contain the stable pseudonymous CAIL subject.
+ *   - Subject derivation is explicit and intended only for a trusted CUNY
+ *     authentication boundary, never for user-controlled request data.
  */
 import { base64url, importJWK, jwtVerify } from "jose";
+/** Stable pseudonymous identifier shared across CAIL applications. */
+export const CAIL_SUBJECT_PATTERN = /^cail-[0-9a-f]{32}$/;
+/** True only for the canonical stable CAIL subject representation. */
+export function isCailSubject(value) {
+    return typeof value === "string" && CAIL_SUBJECT_PATTERN.test(value);
+}
+const CUNY_LOGIN_REALM = "@LOGIN.CUNY.EDU";
+const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/;
+const encoder = new TextEncoder();
+/**
+ * Canonicalize the trusted CUNY OIDC subject used as pseudonym input.
+ *
+ * This preserves the established CAIL contract: trim, uppercase, and remove
+ * one trailing `@LOGIN.CUNY.EDU` realm. It does not authenticate the value.
+ */
+export function canonicalizeCunySubject(subject) {
+    if (typeof subject !== "string" || CONTROL_CHARACTER.test(subject)) {
+        throw new TypeError("CUNY OIDC subject must be a string without controls.");
+    }
+    let canonical = subject.trim().toUpperCase();
+    if (canonical.endsWith(CUNY_LOGIN_REALM)) {
+        canonical = canonical.slice(0, -CUNY_LOGIN_REALM.length);
+    }
+    if (canonical === "") {
+        throw new TypeError("CUNY OIDC subject must not be empty.");
+    }
+    return canonical;
+}
+function bytesToHex(bytes) {
+    let result = "";
+    for (const byte of bytes)
+        result += byte.toString(16).padStart(2, "0");
+    return result;
+}
+/**
+ * Derive the established stable pseudonymous CAIL subject.
+ *
+ * `cail-` + the first 32 hexadecimal characters of
+ * HMAC-SHA256(subjectSalt, `${issuer}|${canonicalSubject}`).
+ */
+export async function deriveCailSubject(options) {
+    if (typeof options !== "object" ||
+        options === null ||
+        typeof options.issuer !== "string" ||
+        options.issuer === "" ||
+        CONTROL_CHARACTER.test(options.issuer)) {
+        throw new TypeError("issuer must be a non-empty string without controls.");
+    }
+    if (typeof options.subjectSalt !== "string" ||
+        options.subjectSalt === "" ||
+        CONTROL_CHARACTER.test(options.subjectSalt)) {
+        throw new TypeError("subjectSalt must be a non-empty string without controls.");
+    }
+    const canonical = canonicalizeCunySubject(options.oidcSubject);
+    const key = await crypto.subtle.importKey("raw", encoder.encode(options.subjectSalt), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    const digest = new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(`${options.issuer}|${canonical}`)));
+    return `cail-${bytesToHex(digest).slice(0, 32)}`;
+}
 /** Canonical production issuer — list it in `allowedIssuers` to accept prod. */
 export const CAIL_CANONICAL_ISSUER = "https://tools.ailab.gc.cuny.edu/cail-sso";
 /** Staging issuer — list it in `allowedIssuers` to accept staging. */
@@ -156,7 +214,7 @@ async function verifyIdentityJwtInternal(token, jwks, opts) {
     }
     if (nbf !== undefined && !isFiniteNumber(nbf))
         return null;
-    if (typeof sub !== "string" || sub === "")
+    if (!isCailSubject(sub))
         return null;
     try {
         const key = await importJWK(candidates[0], "RS256");
