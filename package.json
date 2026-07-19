@@ -41,5 +41,9 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/CUNY-AI-Lab/cail-identity.git"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "restricted"
   }
 }
