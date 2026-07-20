@@ -163,10 +163,39 @@ describe("verifyIdentityJwt algorithm and key selection", () => {
       { ...oldKey.publicJwk, n: "" },
       { ...oldKey.publicJwk, e: "AB" },
       { ...oldKey.publicJwk, d: "private-material" },
+      { ...oldKey.publicJwk, k: "c2VjcmV0LWtleQ" },
+      { ...oldKey.publicJwk, oth: [] },
     ];
     for (const key of invalidKeys) {
       expect(await verify(token, { keys: [key] })).toBeNull();
     }
+  });
+
+  it("rejects non-minimal Base64urlUInt encodings for RSA n and e", async () => {
+    const token = await mintRsaJwt(claims(), oldKey);
+    const withLeadingZero = (value: string): string =>
+      base64url.encode(Uint8Array.from([0, ...base64url.decode(value)]));
+
+    for (const key of [
+      { ...oldKey.publicJwk, n: withLeadingZero(oldKey.publicJwk.n!) },
+      { ...oldKey.publicJwk, e: withLeadingZero(oldKey.publicJwk.e!) },
+    ]) {
+      expect(await verify(token, { keys: [key] })).toBeNull();
+    }
+  });
+
+  it("rejects private material anywhere in the supplied JWKS", async () => {
+    const token = await mintRsaJwt(claims(), oldKey);
+    const unrelatedSecret = {
+      kty: "oct",
+      kid: "must-not-be-in-a-public-jwks",
+      k: "c2VjcmV0LWtleQ",
+    };
+    expect(
+      await verify(token, {
+        keys: [oldKey.publicJwk, unrelatedSecret],
+      }),
+    ).toBeNull();
   });
 
   it("rejects malformed JWKS containers and inherited keys", async () => {
@@ -197,6 +226,14 @@ describe("verifyIdentityJwt algorithm and key selection", () => {
       expect(await verify(`${encodeJson(header)}.${payload}.${signature}`)).toBeNull();
     }
   });
+
+  it.each([false, "false", 0, null])(
+    "rejects malformed or unencoded-payload b64 header %j",
+    async (b64) => {
+      const token = await mintRsaJwt(claims(), oldKey, { b64 });
+      expect(await verify(token)).toBeNull();
+    },
+  );
 
   it("rejects a valid token signed by a different key under the selected kid", async () => {
     const token = await mintRsaJwt(claims(), newKey, { kid: oldKey.kid });
@@ -291,6 +328,7 @@ describe("verifyIdentityJwt time and options", () => {
     { ...OPTS, now: Number.POSITIVE_INFINITY },
     { ...OPTS, clockToleranceSeconds: -1 },
     { ...OPTS, clockToleranceSeconds: Number.NaN },
+    { ...OPTS, clockToleranceSeconds: 301 },
   ])("fails closed for invalid options %#", async (opts) => {
     expect(await verify(await mintRsaJwt(claims(), oldKey), oldKey.jwks, opts)).toBeNull();
   });
@@ -306,6 +344,10 @@ describe("verifyIdentityJwt time and options", () => {
 
   it.each(["0", Number.NaN, Number.NEGATIVE_INFINITY])("rejects invalid nbf %j", async (nbf) => {
     expect(await verify(await mintRsaJwt(claims({ nbf }), oldKey))).toBeNull();
+  });
+
+  it.each(["0", null, [], {}])("rejects invalid iat %j when present", async (iat) => {
+    expect(await verify(await mintRsaJwt(claims({ iat }), oldKey))).toBeNull();
   });
 });
 

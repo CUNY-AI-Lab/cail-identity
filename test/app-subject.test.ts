@@ -27,8 +27,11 @@ describe("stable CAIL app-principal subject", () => {
       first,
     );
     await expect(
-      deriveAppSubject("kale:reference-librarian", "another-salt"),
-    ).resolves.toBe("app-eda0260326501a46c042e4f6281ed412");
+      deriveAppSubject(
+        "kale:reference-librarian",
+        "another-salt-at-least-32-bytes-long",
+      ),
+    ).resolves.toBe("app-5375378fcf5a70dfdc592598fd89210f");
   });
 
   it("uses the app id byte-exact — no canonicalization", async () => {
@@ -59,6 +62,9 @@ describe("stable CAIL app-principal subject", () => {
     await expect(
       deriveAppSubject("kale:widget", "ctl\u0001salt"),
     ).rejects.toThrow("subjectSalt");
+    await expect(
+      deriveAppSubject("kale:widget", "x".repeat(31)),
+    ).rejects.toThrow("32 UTF-8 bytes");
   });
 
   it("isAppSubject accepts only the canonical representation", () => {

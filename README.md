@@ -22,11 +22,23 @@ only — never commit a token):
 @cuny-ai-lab:registry=https://npm.pkg.github.com
 ```
 
-Pin a semver range, for example `"@cuny-ai-lab/cail-identity": "^4.0.0"`, then
-run `bun install` with `NODE_AUTH_TOKEN` set in the environment to a GitHub
-PAT that has `read:packages` (supplied by a user-level `~/.npmrc` or a CI
-secret). Maintainers publish with `npm publish`; `bun publish` does not
-authenticate against GitHub Packages.
+Configure authentication outside the repository, for example in the user's
+`~/.npmrc`:
+
+```ini
+//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
+```
+
+These are registry configuration files that Bun reads; no npm CLI is required.
+Pin a semver range, for example `"@cuny-ai-lab/cail-identity": "^4.4.1"`, then
+run `bun install` with `NODE_AUTH_TOKEN` set to a
+[classic GitHub PAT](https://docs.github.com/en/packages/learn-github-packages/introduction-to-github-packages#authenticating-to-github-packages)
+that has `read:packages`. CI may supply the same environment variable from a
+secret. Maintainers keep the same registry and authentication configuration
+outside the repository, set `NODE_AUTH_TOKEN` to a classic PAT with
+`write:packages`, verify with `bun publish --dry-run`, and release with
+`bun publish`. GitHub Actions may instead use its repository `GITHUB_TOKEN`
+with `packages: write`.
 
 ## Stable subject
 
@@ -42,14 +54,18 @@ const subject = await deriveCailSubject({
 
 The established algorithm is:
 
-1. Trim and uppercase the trusted OIDC subject.
+1. Trim ASCII edge whitespace and uppercase ASCII letters in the trusted OIDC
+   subject.
 2. Remove one trailing `@LOGIN.CUNY.EDU` realm.
 3. Compute `HMAC-SHA256(subjectSalt, issuer + "|" + canonicalSubject)`.
 4. Return `cail-` followed by the first 32 lowercase hexadecimal characters.
 
 This function does not authenticate its input. Call it only with a subject
 obtained from a verified CUNY token or trusted user-info response. The salt is a
-server secret. The issuer namespaces otherwise identical subjects.
+server secret containing at least 32 UTF-8 bytes, matching the gateway's
+minimum. The issuer namespaces otherwise identical subjects. Inputs that
+canonicalize to empty or retain an ASCII control character are rejected; the
+Lua and TypeScript output vectors cover the accepted production CUNY shapes.
 
 ## Stable app-principal subject (ADR-0007)
 
@@ -67,7 +83,8 @@ domain-separation prefix. The disjoint `app-` output prefix
 with a user `cail-` subject in a spend partition, audit row, or workspace key.
 The app id is a stable control-plane identifier used byte-exact (no
 canonicalization) and must come from a trusted issuing service, never from
-user-controlled request data.
+user-controlled request data. Its salt has the same 32-UTF-8-byte minimum as
+the user-subject derivation salt.
 
 ## Signed identity
 
@@ -104,11 +121,17 @@ verification requires the exact pattern `^cail-[0-9a-f]{32}$`.
 The verifier accepts exactly one configured issuer and one scalar audience. It
 requires a canonical three-part JWT, `alg: "RS256"`, a nonempty `kid`, a finite
 `exp`, an optional finite `nbf`, and the canonical CAIL subject. Issuer and
-audience comparisons are exact and case-sensitive.
+audience comparisons are exact and case-sensitive. Clock tolerance defaults to
+60 seconds and may be configured from 0 through 300 seconds; larger values fail
+closed rather than silently weakening expiration and not-before checks.
+Unencoded-payload (`b64: false`) JWTs and critical header extensions are not
+part of the identity profile.
 
 The supplied JWKS must contain exactly one eligible public RSA verification key
 for the token's `kid`. The verifier never follows `jku`, `x5u`, or any other
-token-controlled URL. Signature and registered-claim verification use
+token-controlled URL. It rejects private JWK parameters (including symmetric
+`k` material) and non-minimal RSA Base64urlUInt encodings before importing the
+key. Signature and registered-claim verification use
 [`jose`](https://github.com/panva/jose).
 
 Every malformed input, verification failure, configuration error, or
@@ -148,17 +171,23 @@ const identity = await verifyIdentityJwt(token, config.jwks, {
 });
 ```
 
-The helper never throws — config-invalid is a returned value. Validation is
-structural (a JWK Set object with a `keys` array of objects); an empty `keys`
-array is a loaded config, and per-`kid` key selection remains token
-validation.
+The helper never throws — config-invalid is a returned value. Validation
+requires a JWK Set object with a `keys` array of objects containing no private
+JWK parameters and a canonical, exact issuer; private parameters make the JWKS
+malformed. An empty `keys` array is still a loaded config, and per-`kid` public
+RSA key eligibility remains token validation. If `supportedIssuers` is
+supplied, it must itself be a unique nonempty array of canonical issuer
+strings.
 
 ## Platform role
 
 CAIL applications verify incoming identity JWTs at their own trusted boundary.
-When they call the model platform, they give the same audience-appropriate JWT
-to `@cuny-ai-lab/cail-client`. The CAIL model proxy performs this verification
-and binds the token's stable subject to model access, spend, and quotas.
+A gateway JWT has one scalar audience for the service receiving it and must
+never be relayed to another service. Model-platform calls use a user-bound CAIL
+credential or an approved audience-pinned exchange/facade; only a request sent
+directly to the model proxy may carry a JWT whose sole audience is
+`cail:model-proxy`. The proxy binds verified subjects and credentials to model
+access and spend attribution.
 
 Subject derivation (`deriveCailSubject`) exists for the trusted authentication
 boundary only — the SSO gate and its verification tooling. Application code
@@ -235,10 +264,10 @@ stay consumer-local by design.
 
 ```bash
 bun install
-bun run typecheck
-bun run test
-bun run check:dist
+bun run check
+bun run check:package
 bun audit
+bun publish --dry-run
 ```
 
 Build output is committed and ships in the published package, so consumers

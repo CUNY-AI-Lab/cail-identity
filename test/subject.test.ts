@@ -68,6 +68,13 @@ describe("stable CAIL subject", () => {
         oidcSubject: "bob",
       }),
     ).rejects.toThrow("subjectSalt");
+    await expect(
+      deriveCailSubject({
+        ...options,
+        subjectSalt: "x".repeat(31),
+        oidcSubject: "bob",
+      }),
+    ).rejects.toThrow("32 UTF-8 bytes");
   });
 
   it("normalizes ASCII-only and never collides distinct non-ASCII subjects", async () => {

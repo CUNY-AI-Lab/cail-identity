@@ -36,8 +36,9 @@ export declare function isCailSubject(value: unknown): value is string;
  * that quirk — ASCII whitespace trim, ASCII-only uppercase, one trailing
  * `@LOGIN.CUNY.EDU` realm removed — and leave everything else opaque.
  *
- * ASCII-only is load-bearing: it must produce byte-identical output to the
- * gate's LuaJIT `canonicalize_sub` (byte-wise `:upper()` and `%s`). A
+ * ASCII-only is load-bearing: accepted inputs must produce byte-identical
+ * output to the gate's LuaJIT `canonicalize_sub` (byte-wise `:upper()` and
+ * `%s`). A
  * Unicode-aware `toUpperCase()`/`trim()` would (a) diverge from the gate on
  * non-ASCII input and (b) *collide distinct people* — `ß`→`SS`, dotless `ı`→`I`,
  * NBSP trimming — a merge far beyond the realm quirk. CUNY subjects are ASCII,
@@ -94,7 +95,7 @@ export interface VerifyIdentityJwtOptions {
     allowedIssuers: string[];
     /** Unix seconds "now". Default: Math.floor(Date.now() / 1000). */
     now?: number;
-    /** Symmetric clock leeway in seconds. Default 60. */
+    /** Symmetric clock leeway in seconds. Default 60; maximum 300. */
     clockToleranceSeconds?: number;
 }
 /** Why an identity verification CONFIG failed to load. Operator error, not a token error. */
@@ -126,10 +127,11 @@ export type ParseIdentityConfigResult = {
  * every user's auth silently failing. (Precedent: Envoy JWT filter #41669.)
  *
  * Config-invalid is a VALUE here, never an exception: the function does not
- * throw. Structural JWKS validation only — a well-formed JWK Set object with a
- * `keys` array of objects. An empty `keys` array is a loaded (if useless)
- * config; per-key selection remains `verifyIdentityJwt`'s token-validation
- * concern and still fails closed to null.
+ * throw. JWKS validation requires a JWK Set object with a `keys` array of
+ * objects and rejects any private JWK parameter. An empty `keys` array is a
+ * loaded (if useless) config; per-key selection remains
+ * `verifyIdentityJwt`'s token-validation concern and still fails closed to
+ * null.
  */
 export declare function parseIdentityConfig(input: ParseIdentityConfigInput): ParseIdentityConfigResult;
 /**

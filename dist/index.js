@@ -27,7 +27,15 @@ const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/;
 // ASCII whitespace only — the exact set LuaJIT's `%s` pattern trims in the gate
 // (space, tab, newline, vertical tab, form feed, carriage return).
 const ASCII_WHITESPACE = /^[ \t\n\v\f\r]+|[ \t\n\v\f\r]+$/g;
+const ASCII_WHITESPACE_CHARACTER = /[ \t\n\v\f\r]/;
 const encoder = new TextEncoder();
+function assertSubjectSalt(value) {
+    if (typeof value !== "string" ||
+        CONTROL_CHARACTER.test(value) ||
+        encoder.encode(value).byteLength < 32) {
+        throw new TypeError("subjectSalt must contain at least 32 UTF-8 bytes without controls.");
+    }
+}
 /**
  * Canonicalize the trusted CUNY OIDC subject used as pseudonym input.
  *
@@ -38,8 +46,9 @@ const encoder = new TextEncoder();
  * that quirk — ASCII whitespace trim, ASCII-only uppercase, one trailing
  * `@LOGIN.CUNY.EDU` realm removed — and leave everything else opaque.
  *
- * ASCII-only is load-bearing: it must produce byte-identical output to the
- * gate's LuaJIT `canonicalize_sub` (byte-wise `:upper()` and `%s`). A
+ * ASCII-only is load-bearing: accepted inputs must produce byte-identical
+ * output to the gate's LuaJIT `canonicalize_sub` (byte-wise `:upper()` and
+ * `%s`). A
  * Unicode-aware `toUpperCase()`/`trim()` would (a) diverge from the gate on
  * non-ASCII input and (b) *collide distinct people* — `ß`→`SS`, dotless `ı`→`I`,
  * NBSP trimming — a merge far beyond the realm quirk. CUNY subjects are ASCII,
@@ -84,11 +93,7 @@ export async function deriveCailSubject(options) {
         CONTROL_CHARACTER.test(options.issuer)) {
         throw new TypeError("issuer must be a non-empty string without controls.");
     }
-    if (typeof options.subjectSalt !== "string" ||
-        options.subjectSalt === "" ||
-        CONTROL_CHARACTER.test(options.subjectSalt)) {
-        throw new TypeError("subjectSalt must be a non-empty string without controls.");
-    }
+    assertSubjectSalt(options.subjectSalt);
     const canonical = canonicalizeCunySubject(options.oidcSubject);
     const key = await crypto.subtle.importKey("raw", encoder.encode(options.subjectSalt), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
     const digest = new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(`${options.issuer}|${canonical}`)));
@@ -126,11 +131,7 @@ export async function deriveAppSubject(appId, subjectSalt) {
         appId.replace(ASCII_WHITESPACE, "") !== appId) {
         throw new TypeError("appId must be a non-empty string without control characters or edge whitespace.");
     }
-    if (typeof subjectSalt !== "string" ||
-        subjectSalt === "" ||
-        CONTROL_CHARACTER.test(subjectSalt)) {
-        throw new TypeError("subjectSalt must be a non-empty string without controls.");
-    }
+    assertSubjectSalt(subjectSalt);
     const key = await crypto.subtle.importKey("raw", encoder.encode(subjectSalt), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
     const digest = new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(`app|${appId}`)));
     return `app-${bytesToHex(digest).slice(0, 32)}`;
@@ -153,6 +154,7 @@ function ownProp(obj, key) {
 function isFiniteNumber(value) {
     return typeof value === "number" && Number.isFinite(value);
 }
+const MAX_CLOCK_TOLERANCE_SECONDS = 300;
 function isCanonicalBase64url(value) {
     if (typeof value !== "string" || value === "")
         return false;
@@ -160,6 +162,18 @@ function isCanonicalBase64url(value) {
         return false;
     try {
         return base64url.encode(base64url.decode(value)) === value;
+    }
+    catch {
+        return false;
+    }
+}
+function isCanonicalBase64urlUInt(value) {
+    if (!isCanonicalBase64url(value))
+        return false;
+    try {
+        const bytes = base64url.decode(value);
+        // RFC 7518 Base64urlUInt values use the minimum number of octets.
+        return bytes.length > 0 && bytes[0] !== 0;
     }
     catch {
         return false;
@@ -187,6 +201,9 @@ function inspectCailJwt(token) {
             return null;
         if (Object.hasOwn(header, "crit"))
             return null;
+        const b64 = ownProp(header, "b64");
+        if (b64 !== undefined && b64 !== true)
+            return null;
         return { header, payload };
     }
     catch {
@@ -204,6 +221,19 @@ function isUniqueNonemptyStringArray(value) {
 function hasExactAudience(value, expected) {
     return typeof value === "string" && value !== "" && value === expected;
 }
+const PRIVATE_JWK_PARAMETERS = [
+    "d",
+    "p",
+    "q",
+    "dp",
+    "dq",
+    "qi",
+    "oth",
+    "k",
+];
+function containsPrivateJwkMaterial(value) {
+    return PRIVATE_JWK_PARAMETERS.some((name) => Object.hasOwn(value, name));
+}
 function isRsaVerificationJwkForKid(value, kid) {
     if (ownProp(value, "kty") !== "RSA" || ownProp(value, "kid") !== kid) {
         return false;
@@ -219,11 +249,10 @@ function isRsaVerificationJwkForKid(value, kid) {
         (!isUniqueNonemptyStringArray(keyOps) || !keyOps.includes("verify"))) {
         return false;
     }
-    if (["d", "p", "q", "dp", "dq", "qi"].some((name) => Object.hasOwn(value, name))) {
+    if (containsPrivateJwkMaterial(value))
         return false;
-    }
-    return (isCanonicalBase64url(ownProp(value, "n")) &&
-        isCanonicalBase64url(ownProp(value, "e")));
+    return (isCanonicalBase64urlUInt(ownProp(value, "n")) &&
+        isCanonicalBase64urlUInt(ownProp(value, "e")));
 }
 async function verifyIdentityJwtInternal(token, jwks, opts) {
     if (typeof token !== "string" || !isPlainObject(jwks) || !isPlainObject(opts)) {
@@ -245,11 +274,14 @@ async function verifyIdentityJwtInternal(token, jwks, opts) {
         return null;
     const toleranceOption = ownProp(opts, "clockToleranceSeconds");
     const tolerance = toleranceOption === undefined ? 60 : toleranceOption;
-    if (!isFiniteNumber(tolerance) || tolerance < 0)
+    if (!isFiniteNumber(tolerance) ||
+        tolerance < 0 ||
+        tolerance > MAX_CLOCK_TOLERANCE_SECONDS) {
         return null;
+    }
     const keys = ownProp(jwks, "keys");
     if (!Array.isArray(keys) ||
-        !keys.every((key) => isPlainObject(key))) {
+        !keys.every((key) => isPlainObject(key) && !containsPrivateJwkMaterial(key))) {
         return null;
     }
     const inspected = inspectCailJwt(token);
@@ -316,15 +348,27 @@ async function verifyIdentityJwtInternal(token, jwks, opts) {
  * every user's auth silently failing. (Precedent: Envoy JWT filter #41669.)
  *
  * Config-invalid is a VALUE here, never an exception: the function does not
- * throw. Structural JWKS validation only — a well-formed JWK Set object with a
- * `keys` array of objects. An empty `keys` array is a loaded (if useless)
- * config; per-key selection remains `verifyIdentityJwt`'s token-validation
- * concern and still fails closed to null.
+ * throw. JWKS validation requires a JWK Set object with a `keys` array of
+ * objects and rejects any private JWK parameter. An empty `keys` array is a
+ * loaded (if useless) config; per-key selection remains
+ * `verifyIdentityJwt`'s token-validation concern and still fails closed to
+ * null.
  */
 export function parseIdentityConfig(input) {
-    if (!isPlainObject(input))
+    try {
+        if (!isPlainObject(input))
+            return { ok: false, reason: "jwks_missing" };
+    }
+    catch {
         return { ok: false, reason: "jwks_missing" };
-    const rawJwks = ownProp(input, "jwks");
+    }
+    let rawJwks;
+    try {
+        rawJwks = ownProp(input, "jwks");
+    }
+    catch {
+        return { ok: false, reason: "jwks_missing" };
+    }
     if (typeof rawJwks !== "string" || rawJwks.replace(ASCII_WHITESPACE, "") === "") {
         return { ok: false, reason: "jwks_missing" };
     }
@@ -339,17 +383,42 @@ export function parseIdentityConfig(input) {
         return { ok: false, reason: "jwks_malformed" };
     const keys = ownProp(parsed, "keys");
     if (!Array.isArray(keys) ||
-        !keys.every((key) => isPlainObject(key))) {
+        !keys.every((key) => isPlainObject(key) && !containsPrivateJwkMaterial(key))) {
         return { ok: false, reason: "jwks_malformed" };
     }
-    const issuer = ownProp(input, "issuer");
-    if (typeof issuer !== "string" || issuer === "") {
+    let issuer;
+    try {
+        issuer = ownProp(input, "issuer");
+    }
+    catch {
         return { ok: false, reason: "issuer_missing" };
     }
-    const supportedIssuers = ownProp(input, "supportedIssuers");
+    if (typeof issuer !== "string" ||
+        issuer.replace(ASCII_WHITESPACE, "") === "") {
+        return { ok: false, reason: "issuer_missing" };
+    }
+    if (ASCII_WHITESPACE_CHARACTER.test(issuer) ||
+        CONTROL_CHARACTER.test(issuer)) {
+        return { ok: false, reason: "issuer_unsupported" };
+    }
+    let supportedIssuers;
+    try {
+        supportedIssuers = ownProp(input, "supportedIssuers");
+    }
+    catch {
+        return { ok: false, reason: "issuer_unsupported" };
+    }
     if (supportedIssuers !== undefined) {
-        if (!Array.isArray(supportedIssuers) ||
-            !supportedIssuers.includes(issuer)) {
+        try {
+            const canonicalAllowlist = isUniqueNonemptyStringArray(supportedIssuers) &&
+                supportedIssuers.every((value) => !ASCII_WHITESPACE_CHARACTER.test(value) &&
+                    !CONTROL_CHARACTER.test(value));
+            if (!canonicalAllowlist ||
+                !Array.prototype.includes.call(supportedIssuers, issuer)) {
+                return { ok: false, reason: "issuer_unsupported" };
+            }
+        }
+        catch {
             return { ok: false, reason: "issuer_unsupported" };
         }
     }
