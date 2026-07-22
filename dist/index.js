@@ -113,6 +113,16 @@ export function isAppSubject(value) {
     return typeof value === "string" && APP_SUBJECT_PATTERN.test(value);
 }
 /**
+ * True for a canonical user or application principal subject.
+ *
+ * This helper validates identifiers only. It does not authenticate a caller;
+ * services still obtain user subjects from a verified identity JWT and app
+ * subjects from their trusted control plane.
+ */
+export function isCailPrincipalSubject(value) {
+    return isCailSubject(value) || isAppSubject(value);
+}
+/**
  * Derive the stable pseudonymous CAIL app-principal subject (ADR-0007).
  *
  * `app-` + the first 32 hexadecimal characters of

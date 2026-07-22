@@ -71,6 +71,16 @@ export declare function deriveCailSubject(options: DeriveCailSubjectOptions): Pr
 export declare const APP_SUBJECT_PATTERN: RegExp;
 /** True only for the canonical stable CAIL app-principal subject. */
 export declare function isAppSubject(value: unknown): value is string;
+/** A stable subject accepted by CAIL accounting and ownership boundaries. */
+export type CailPrincipalSubject = string;
+/**
+ * True for a canonical user or application principal subject.
+ *
+ * This helper validates identifiers only. It does not authenticate a caller;
+ * services still obtain user subjects from a verified identity JWT and app
+ * subjects from their trusted control plane.
+ */
+export declare function isCailPrincipalSubject(value: unknown): value is CailPrincipalSubject;
 /**
  * Derive the stable pseudonymous CAIL app-principal subject (ADR-0007).
  *

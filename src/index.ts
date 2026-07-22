@@ -159,6 +159,22 @@ export function isAppSubject(value: unknown): value is string {
   return typeof value === "string" && APP_SUBJECT_PATTERN.test(value);
 }
 
+/** A stable subject accepted by CAIL accounting and ownership boundaries. */
+export type CailPrincipalSubject = string;
+
+/**
+ * True for a canonical user or application principal subject.
+ *
+ * This helper validates identifiers only. It does not authenticate a caller;
+ * services still obtain user subjects from a verified identity JWT and app
+ * subjects from their trusted control plane.
+ */
+export function isCailPrincipalSubject(
+  value: unknown,
+): value is CailPrincipalSubject {
+  return isCailSubject(value) || isAppSubject(value);
+}
+
 /**
  * Derive the stable pseudonymous CAIL app-principal subject (ADR-0007).
  *

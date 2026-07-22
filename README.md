@@ -30,7 +30,7 @@ Configure authentication outside the repository, for example in the user's
 ```
 
 These are registry configuration files that Bun reads; no npm CLI is required.
-Pin a semver range, for example `"@cuny-ai-lab/cail-identity": "^4.4.1"`, then
+Pin an exact release, for example `"@cuny-ai-lab/cail-identity": "4.5.0"`, then
 run `bun install` with `NODE_AUTH_TOKEN` set to a
 [classic GitHub PAT](https://docs.github.com/en/packages/learn-github-packages/introduction-to-github-packages#authenticating-to-github-packages)
 that has `read:packages`. CI may supply the same environment variable from a
@@ -259,6 +259,15 @@ await issuer.mintIdentityJwt({
 The kit signs REAL RS256 tokens only. It will never mint `alg:"none"`,
 non-RS256 algorithms, or wrong-key signatures — genuinely malformed shapes
 stay consumer-local by design.
+
+## Principal contract
+
+`isCailPrincipalSubject` accepts either a canonical verified user subject
+(`cail-<32 lowercase hex>`) or a trusted application accounting subject
+(`app-<32 lowercase hex>`). It validates only the identifier shape; it does
+not authenticate the caller. The packaged
+`@cuny-ai-lab/cail-identity/contract/principal-v1.json` schema is the
+language-neutral conformance surface.
 
 ## Development
 

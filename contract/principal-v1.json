@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cuny-ai-lab.invalid/contracts/principal-v1.json",
+  "title": "CAIL principal subject",
+  "description": "Stable CAIL ownership and accounting subjects. Authentication is established separately by an audience-pinned identity JWT or another explicitly reviewed credential boundary.",
+  "oneOf": [
+    {
+      "title": "User principal",
+      "type": "string",
+      "pattern": "^cail-[0-9a-f]{32}$"
+    },
+    {
+      "title": "Application principal",
+      "type": "string",
+      "pattern": "^app-[0-9a-f]{32}$"
+    }
+  ],
+  "examples": [
+    "cail-0123456789abcdef0123456789abcdef",
+    "app-abcdef0123456789abcdef0123456789"
+  ]
+}
