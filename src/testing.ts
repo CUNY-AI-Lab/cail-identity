@@ -159,6 +159,20 @@ export const TEST_SUBJECTS = {
   carol: canonicalTestSubject("carol"),
 } as const;
 
+/** Deterministic operational pseudonym for tests; never use for production. */
+export function canonicalTestOperationalSubject(seed: string): string {
+  return canonicalTestSubject(`operational:${seed}`).replace(
+    /^cail-/,
+    "cail-v1-",
+  );
+}
+
+export const TEST_OPERATIONAL_SUBJECTS = {
+  alice: canonicalTestOperationalSubject("alice"),
+  bob: canonicalTestOperationalSubject("bob"),
+  carol: canonicalTestOperationalSubject("carol"),
+} as const;
+
 // ---------------------------------------------------------------------------
 // In-memory RS256 test identity issuer
 // ---------------------------------------------------------------------------
@@ -171,6 +185,8 @@ export interface MintTestIdentityJwtOptions {
   /** `sub` claim. Default: {@link TEST_SUBJECTS}.alice. Any string is allowed
    * so fail-closed paths (non-canonical subjects) can be exercised too. */
   subject?: string;
+  /** Optional separately keyed operational-event pseudonym (`log_sub`). */
+  operationalSubject?: string;
   /** Optional `email` claim. */
   email?: string;
   /** Optional `name` claim. */
@@ -277,6 +293,9 @@ export async function createTestIdentityIssuer(options?: {
         iss: mint.issuer ?? issuer,
         aud: mint.audience,
         sub: mint.subject ?? TEST_SUBJECTS.alice,
+        ...(mint.operationalSubject !== undefined
+          ? { log_sub: mint.operationalSubject }
+          : {}),
         iat: now,
         exp: now + (mint.expiresInSeconds ?? 3600),
         ...(mint.email !== undefined ? { email: mint.email } : {}),

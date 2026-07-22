@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cuny-ai-lab.invalid/contracts/identity-jwt-claims-v1.json",
+  "title": "CAIL identity JWT claims",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["iss", "aud", "sub", "exp"],
+  "properties": {
+    "iss": { "type": "string", "minLength": 1 },
+    "aud": { "type": "string", "minLength": 1 },
+    "sub": { "type": "string", "pattern": "^cail-[0-9a-f]{32}$" },
+    "log_sub": { "type": "string", "pattern": "^cail-v1-[0-9a-f]{32}$" },
+    "exp": { "type": "number" }
+  },
+  "examples": [
+    {
+      "iss": "https://tools.ailab.gc.cuny.edu/cail-sso",
+      "aud": "cail:workbench",
+      "sub": "cail-0123456789abcdef0123456789abcdef",
+      "log_sub": "cail-v1-fedcba9876543210fedcba9876543210",
+      "exp": 2000000000
+    }
+  ]
+}

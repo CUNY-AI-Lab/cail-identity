@@ -145,6 +145,15 @@ export const TEST_SUBJECTS = {
     bob: canonicalTestSubject("bob"),
     carol: canonicalTestSubject("carol"),
 };
+/** Deterministic operational pseudonym for tests; never use for production. */
+export function canonicalTestOperationalSubject(seed) {
+    return canonicalTestSubject(`operational:${seed}`).replace(/^cail-/, "cail-v1-");
+}
+export const TEST_OPERATIONAL_SUBJECTS = {
+    alice: canonicalTestOperationalSubject("alice"),
+    bob: canonicalTestOperationalSubject("bob"),
+    carol: canonicalTestOperationalSubject("carol"),
+};
 /**
  * Create an in-memory RS256 test identity issuer: a fresh keypair, its public
  * JWKS, and a `mintIdentityJwt` that signs identity JWTs verifiable with that
@@ -199,6 +208,9 @@ export async function createTestIdentityIssuer(options) {
                 iss: mint.issuer ?? issuer,
                 aud: mint.audience,
                 sub: mint.subject ?? TEST_SUBJECTS.alice,
+                ...(mint.operationalSubject !== undefined
+                    ? { log_sub: mint.operationalSubject }
+                    : {}),
                 iat: now,
                 exp: now + (mint.expiresInSeconds ?? 3600),
                 ...(mint.email !== undefined ? { email: mint.email } : {}),

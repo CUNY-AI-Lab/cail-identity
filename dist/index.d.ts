@@ -18,6 +18,8 @@
 import { type JSONWebKeySet } from "jose";
 export interface CailIdentity {
     subject: string;
+    /** Separately keyed pseudonym for privacy-bounded operational events. */
+    operationalSubject?: string;
     email?: string;
     name?: string;
     entitlements: string[];
@@ -81,6 +83,19 @@ export type CailPrincipalSubject = string;
  * subjects from their trusted control plane.
  */
 export declare function isCailPrincipalSubject(value: unknown): value is CailPrincipalSubject;
+export declare const CAIL_OPERATIONAL_SUBJECT_PATTERN: RegExp;
+export declare function isCailOperationalSubject(value: unknown): value is string;
+export interface DeriveCailOperationalSubjectOptions {
+    issuer: string;
+    oidcSubject: string;
+    /** A dedicated secret; do not reuse the ownership-subject salt. */
+    operationalSubjectSalt: string;
+}
+/**
+ * Derive the separately keyed pseudonym carried as the identity JWT `log_sub`
+ * claim and used only for operational events.
+ */
+export declare function deriveCailOperationalSubject(options: DeriveCailOperationalSubjectOptions): Promise<string>;
 /**
  * Derive the stable pseudonymous CAIL app-principal subject (ADR-0007).
  *

@@ -30,7 +30,7 @@ Configure authentication outside the repository, for example in the user's
 ```
 
 These are registry configuration files that Bun reads; no npm CLI is required.
-Pin an exact release, for example `"@cuny-ai-lab/cail-identity": "4.5.0"`, then
+Pin an exact release, for example `"@cuny-ai-lab/cail-identity": "4.6.0"`, then
 run `bun install` with `NODE_AUTH_TOKEN` set to a
 [classic GitHub PAT](https://docs.github.com/en/packages/learn-github-packages/introduction-to-github-packages#authenticating-to-github-packages)
 that has `read:packages`. CI may supply the same environment variable from a
@@ -107,11 +107,19 @@ The result is:
 ```ts
 type CailIdentity = {
   subject: `cail-${string}`;
+  operationalSubject?: `cail-v1-${string}`;
   email?: string;
   name?: string;
   entitlements: string[];
 };
 ```
+
+`operationalSubject` comes only from a validated `log_sub` claim. The trusted
+identity boundary derives it with `deriveCailOperationalSubject` using a
+dedicated salt and the domain-separated operational-log v1 input. It is not a
+reversible prefix change from `subject`. Services that did not receive this
+claim omit subject-bearing operational events rather than inventing a
+conversion.
 
 In the TypeScript declaration `subject` remains `string`, but runtime
 verification requires the exact pattern `^cail-[0-9a-f]{32}$`.
@@ -268,6 +276,8 @@ stay consumer-local by design.
 not authenticate the caller. The packaged
 `@cuny-ai-lab/cail-identity/contract/principal-v1.json` schema is the
 language-neutral conformance surface.
+The adjacent `contract/identity-jwt-claims-v1.json` schema pins the optional,
+separately keyed `log_sub` claim used by operational event producers.
 
 ## Development
 

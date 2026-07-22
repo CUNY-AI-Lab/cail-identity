@@ -48,6 +48,13 @@ export declare const TEST_SUBJECTS: {
     readonly bob: string;
     readonly carol: string;
 };
+/** Deterministic operational pseudonym for tests; never use for production. */
+export declare function canonicalTestOperationalSubject(seed: string): string;
+export declare const TEST_OPERATIONAL_SUBJECTS: {
+    readonly alice: string;
+    readonly bob: string;
+    readonly carol: string;
+};
 export interface MintTestIdentityJwtOptions {
     /** `aud` claim — a string is the well-formed shape verifiers accept; a
      * string ARRAY (even one-element) mints the array-`aud` shape CAIL
@@ -56,6 +63,8 @@ export interface MintTestIdentityJwtOptions {
     /** `sub` claim. Default: {@link TEST_SUBJECTS}.alice. Any string is allowed
      * so fail-closed paths (non-canonical subjects) can be exercised too. */
     subject?: string;
+    /** Optional separately keyed operational-event pseudonym (`log_sub`). */
+    operationalSubject?: string;
     /** Optional `email` claim. */
     email?: string;
     /** Optional `name` claim. */

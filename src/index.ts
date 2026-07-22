@@ -20,6 +20,8 @@ import { base64url, importJWK, jwtVerify, type JSONWebKeySet } from "jose";
 
 export interface CailIdentity {
   subject: string;
+  /** Separately keyed pseudonym for privacy-bounded operational events. */
+  operationalSubject?: string;
   email?: string;
   name?: string;
   entitlements: string[];
@@ -173,6 +175,56 @@ export function isCailPrincipalSubject(
   value: unknown,
 ): value is CailPrincipalSubject {
   return isCailSubject(value) || isAppSubject(value);
+}
+
+export const CAIL_OPERATIONAL_SUBJECT_PATTERN = /^cail-v1-[0-9a-f]{32}$/;
+
+export function isCailOperationalSubject(value: unknown): value is string {
+  return (
+    typeof value === "string" && CAIL_OPERATIONAL_SUBJECT_PATTERN.test(value)
+  );
+}
+
+export interface DeriveCailOperationalSubjectOptions {
+  issuer: string;
+  oidcSubject: string;
+  /** A dedicated secret; do not reuse the ownership-subject salt. */
+  operationalSubjectSalt: string;
+}
+
+/**
+ * Derive the separately keyed pseudonym carried as the identity JWT `log_sub`
+ * claim and used only for operational events.
+ */
+export async function deriveCailOperationalSubject(
+  options: DeriveCailOperationalSubjectOptions,
+): Promise<string> {
+  if (
+    typeof options !== "object" ||
+    options === null ||
+    typeof options.issuer !== "string" ||
+    options.issuer === "" ||
+    CONTROL_CHARACTER.test(options.issuer)
+  ) {
+    throw new TypeError("issuer must be a non-empty string without controls.");
+  }
+  assertSubjectSalt(options.operationalSubjectSalt);
+  const canonical = canonicalizeCunySubject(options.oidcSubject);
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(options.operationalSubjectSalt),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const digest = new Uint8Array(
+    await crypto.subtle.sign(
+      "HMAC",
+      key,
+      encoder.encode(`operational-log:v1|${options.issuer}|${canonical}`),
+    ),
+  );
+  return `cail-v1-${bytesToHex(digest).slice(0, 32)}`;
 }
 
 /**
@@ -451,8 +503,18 @@ async function verifyIdentityJwtInternal(
   const email = ownProp(inspected.payload, "email");
   const name = ownProp(inspected.payload, "name");
   const entitlements = ownProp(inspected.payload, "entitlements");
+  const operationalSubject = ownProp(inspected.payload, "log_sub");
+  if (
+    operationalSubject !== undefined &&
+    !isCailOperationalSubject(operationalSubject)
+  ) {
+    return null;
+  }
   return {
     subject: sub,
+    ...(typeof operationalSubject === "string"
+      ? { operationalSubject }
+      : {}),
     email: typeof email === "string" ? email : undefined,
     name: typeof name === "string" ? name : undefined,
     entitlements: Array.isArray(entitlements)
