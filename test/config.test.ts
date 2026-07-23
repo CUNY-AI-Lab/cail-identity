@@ -175,6 +175,74 @@ describe("loadIdentityVerifierConfig JWKS errors", () => {
     }
   });
 
+  it("accepts a valid 2048-bit RS256 public key", async () => {
+    const modulus = Buffer.from(key.publicJwk.n!, "base64url");
+    expect(modulus).toHaveLength(256);
+    expect(modulus[0]! & 0x80).not.toBe(0);
+    expect(key.publicJwk.e).toBe("AQAB");
+    await expect(load()).resolves.toMatchObject({ ok: true });
+    await expect(
+      load({
+        jwks: JSON.stringify({
+          keys: [{ ...key.publicJwk, e: "Aw" }],
+        }),
+      }),
+    ).resolves.toMatchObject({ ok: true });
+  });
+
+  it("rejects unusable RSA public numbers before import", async () => {
+    const evenModulus = Buffer.from(key.publicJwk.n!, "base64url");
+    evenModulus[evenModulus.length - 1] =
+      evenModulus[evenModulus.length - 1]! & 0xfe;
+    const shortModulus = Buffer.from(key.publicJwk.n!, "base64url");
+    shortModulus[0] = 0x7f;
+    const tooLargeSafeExponent = Buffer.from([
+      0x20, 0, 0, 0, 0, 0, 1,
+    ]).toString("base64url");
+
+    const invalidKeys = [
+      { ...key.publicJwk, e: "AQ" }, // 1
+      { ...key.publicJwk, e: "Ag" }, // 2
+      { ...key.publicJwk, e: tooLargeSafeExponent },
+      { ...key.publicJwk, n: "AQ", e: "AQAB" }, // tiny odd modulus
+      { ...key.publicJwk, n: "Ag", e: "Aw" }, // tiny even modulus
+      { ...key.publicJwk, n: "AA" }, // zero modulus
+      {
+        ...key.publicJwk,
+        n: Buffer.from("arbitrary modulus bytes").toString("base64url"),
+      },
+      { ...key.publicJwk, n: evenModulus.toString("base64url") },
+      { ...key.publicJwk, n: shortModulus.toString("base64url") },
+    ];
+
+    for (const invalidKey of invalidKeys) {
+      await expect(
+        load({ jwks: JSON.stringify({ keys: [invalidKey] }) }),
+      ).resolves.toEqual({ ok: false, reason: "jwks_malformed" });
+    }
+  });
+
+  it("rejects malformed RSA public-number encodings", async () => {
+    const withLeadingZero = (value: string): string =>
+      Buffer.from([0, ...Buffer.from(value, "base64url")]).toString(
+        "base64url",
+      );
+    const invalidKeys = [
+      { ...key.publicJwk, n: `${key.publicJwk.n!}=` },
+      { ...key.publicJwk, e: `${key.publicJwk.e!}=` },
+      { ...key.publicJwk, n: `+${key.publicJwk.n!.slice(1)}` },
+      { ...key.publicJwk, e: "AB" },
+      { ...key.publicJwk, n: withLeadingZero(key.publicJwk.n!) },
+      { ...key.publicJwk, e: withLeadingZero(key.publicJwk.e!) },
+    ];
+
+    for (const invalidKey of invalidKeys) {
+      await expect(
+        load({ jwks: JSON.stringify({ keys: [invalidKey] }) }),
+      ).resolves.toEqual({ ok: false, reason: "jwks_malformed" });
+    }
+  });
+
   it("uses parsed own-data JSON and never honors inherited key metadata", async () => {
     const inherited = Object.create(key.publicJwk) as Record<string, unknown>;
     inherited.kid = key.kid;
@@ -246,12 +314,34 @@ describe("loadIdentityVerifierConfig audience and timing", () => {
     });
   });
 
-  it.each([["cail:x"], 7, "cail:\u0000x"])(
+  it.each([["cail:x"], 7, " ", "   ", "cail:\u0000x"])(
     "rejects nonscalar or malformed audience %j",
     async (expectedAudience) => {
       await expect(
         load({ expectedAudience: expectedAudience as unknown as string }),
       ).resolves.toEqual({ ok: false, reason: "audience_malformed" });
+    },
+  );
+
+  it.each([" ", "   "])(
+    "rejects a matching signed token for whitespace-only audience %j at the config boundary",
+    async (expectedAudience) => {
+      const matchingToken = await mintRsaJwt(
+        {
+          sub: "cail-0123456789abcdef0123456789abcdef",
+          aud: expectedAudience,
+          iss: ISS,
+          exp: NOW + 3600,
+        },
+        key,
+      );
+      const loaded = await load({ expectedAudience });
+      expect(loaded).toEqual({ ok: false, reason: "audience_malformed" });
+
+      const validConfig = await mustLoad();
+      await expect(
+        verifyIdentityJwt(matchingToken, validConfig),
+      ).resolves.toBeNull();
     },
   );
 

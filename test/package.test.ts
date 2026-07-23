@@ -36,6 +36,12 @@ function claims(aud: unknown = AUD) {
   };
 }
 
+function jwksWith(overrides: Record<string, unknown>): string {
+  return JSON.stringify({
+    keys: [{ ...fixture.publicJwk, ...overrides }],
+  });
+}
+
 describe("published package entry", () => {
   it("exports the canonical verifier and issuer constants", () => {
     expect(verifyIdentityJwt).toBeTypeOf("function");
@@ -84,5 +90,162 @@ describe("published package entry", () => {
         now: NOW,
       }),
     ).resolves.toEqual({ ok: false, reason: "issuer_unsupported" });
+  });
+
+  it("enforces RSA public-number eligibility through committed dist", async () => {
+    const modulus = Buffer.from(fixture.publicJwk.n!, "base64url");
+    expect(modulus).toHaveLength(256);
+    expect(modulus[0]! & 0x80).not.toBe(0);
+    expect(fixture.publicJwk.e).toBe("AQAB");
+    await expect(
+      loadIdentityVerifierConfig({
+        jwks: JSON.stringify(fixture.jwks),
+        issuer: CAIL_CANONICAL_ISSUER,
+        expectedAudience: AUD,
+        now: NOW,
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    await expect(
+      loadIdentityVerifierConfig({
+        jwks: jwksWith({ e: "Aw" }),
+        issuer: CAIL_CANONICAL_ISSUER,
+        expectedAudience: AUD,
+        now: NOW,
+      }),
+    ).resolves.toMatchObject({ ok: true });
+
+    const evenModulus = Buffer.from(modulus);
+    evenModulus[evenModulus.length - 1] =
+      evenModulus[evenModulus.length - 1]! & 0xfe;
+    const shortModulus = Buffer.from(modulus);
+    shortModulus[0] = 0x7f;
+    const tooLargeSafeExponent = Buffer.from([
+      0x20, 0, 0, 0, 0, 0, 1,
+    ]).toString("base64url");
+    const invalidNumbers = [
+      { e: "AQ" },
+      { e: "Ag" },
+      { e: tooLargeSafeExponent },
+      { n: "AQ", e: "AQAB" },
+      { n: "Ag", e: "Aw" },
+      { n: "AA" },
+      { n: Buffer.from("arbitrary modulus bytes").toString("base64url") },
+      { n: evenModulus.toString("base64url") },
+      { n: shortModulus.toString("base64url") },
+      { n: `${fixture.publicJwk.n!}=` },
+      { e: `${fixture.publicJwk.e!}=` },
+      { e: "AB" },
+    ];
+
+    for (const invalidNumber of invalidNumbers) {
+      await expect(
+        loadIdentityVerifierConfig({
+          jwks: jwksWith(invalidNumber),
+          issuer: CAIL_CANONICAL_ISSUER,
+          expectedAudience: AUD,
+          now: NOW,
+        }),
+      ).resolves.toEqual({ ok: false, reason: "jwks_malformed" });
+    }
+  });
+
+  it("retains duplicate, private, issuer, and timing guards through committed dist", async () => {
+    const malformedJwks = [
+      JSON.stringify({
+        keys: [fixture.publicJwk, { ...fixture.publicJwk }],
+      }),
+      jwksWith({ d: "private-material" }),
+    ];
+    for (const jwks of malformedJwks) {
+      await expect(
+        loadIdentityVerifierConfig({
+          jwks,
+          issuer: CAIL_CANONICAL_ISSUER,
+          expectedAudience: AUD,
+          now: NOW,
+        }),
+      ).resolves.toEqual({ ok: false, reason: "jwks_malformed" });
+    }
+
+    await expect(
+      loadIdentityVerifierConfig({
+        jwks: JSON.stringify(fixture.jwks),
+        issuer: "https://evil.example/cail-sso",
+        expectedAudience: AUD,
+        now: NOW,
+      }),
+    ).resolves.toEqual({ ok: false, reason: "issuer_unsupported" });
+    await expect(
+      loadIdentityVerifierConfig({
+        jwks: JSON.stringify(fixture.jwks),
+        issuer: CAIL_CANONICAL_ISSUER,
+        expectedAudience: AUD,
+        clockToleranceSeconds: 301,
+      }),
+    ).resolves.toEqual({ ok: false, reason: "timing_invalid" });
+  });
+
+  it("rejects whitespace-only audience through committed dist", async () => {
+    for (const expectedAudience of [" ", "   "]) {
+      const matchingToken = await mintRsaJwt(
+        claims(expectedAudience),
+        fixture,
+      );
+      const loaded = await loadIdentityVerifierConfig({
+        jwks: JSON.stringify(fixture.jwks),
+        issuer: CAIL_CANONICAL_ISSUER,
+        expectedAudience,
+        now: NOW,
+      });
+      expect(loaded).toEqual({ ok: false, reason: "audience_malformed" });
+
+      const validConfig = await loadIdentityVerifierConfig({
+        jwks: JSON.stringify(fixture.jwks),
+        issuer: CAIL_CANONICAL_ISSUER,
+        expectedAudience: AUD,
+        now: NOW,
+      });
+      expect(validConfig.ok).toBe(true);
+      if (validConfig.ok) {
+        await expect(
+          verifyIdentityJwt(matchingToken, validConfig.config),
+        ).resolves.toBeNull();
+      }
+    }
+  });
+
+  it("reads hostile config getters once through committed dist", async () => {
+    const counts = new Map<string, number>();
+    const first: Record<string, unknown> = {
+      jwks: JSON.stringify(fixture.jwks),
+      issuer: CAIL_CANONICAL_ISSUER,
+      expectedAudience: AUD,
+      supportedIssuers: [CAIL_CANONICAL_ISSUER],
+      now: NOW,
+      clockToleranceSeconds: 0,
+    };
+    const hostile = Object.create(null) as Record<string, unknown>;
+    for (const [name, value] of Object.entries(first)) {
+      Object.defineProperty(hostile, name, {
+        enumerable: true,
+        get() {
+          const reads = (counts.get(name) ?? 0) + 1;
+          counts.set(name, reads);
+          return reads === 1 ? value : undefined;
+        },
+      });
+    }
+
+    await expect(
+      loadIdentityVerifierConfig(hostile as never),
+    ).resolves.toMatchObject({ ok: true });
+    expect(Object.fromEntries(counts)).toEqual({
+      jwks: 1,
+      issuer: 1,
+      expectedAudience: 1,
+      supportedIssuers: 1,
+      now: 1,
+      clockToleranceSeconds: 1,
+    });
   });
 });

@@ -362,6 +362,7 @@ interface InspectedJwt {
 
 const MAX_CLOCK_TOLERANCE_SECONDS = 300;
 const MAX_DATE_SECONDS = 8_640_000_000_000;
+const MIN_RSA_MODULUS_BITS = 2048;
 
 function isCanonicalBase64url(value: unknown): value is string {
   if (typeof value !== "string" || value === "") return false;
@@ -373,15 +374,41 @@ function isCanonicalBase64url(value: unknown): value is string {
   }
 }
 
-function isCanonicalBase64urlUInt(value: unknown): value is string {
-  if (!isCanonicalBase64url(value)) return false;
+function decodeCanonicalBase64urlUInt(value: unknown): Uint8Array | null {
+  if (!isCanonicalBase64url(value)) return null;
   try {
     const bytes = base64url.decode(value);
     // RFC 7518 Base64urlUInt values use the minimum number of octets.
-    return bytes.length > 0 && bytes[0] !== 0;
+    return bytes.length > 0 && bytes[0] !== 0 ? bytes : null;
   } catch {
+    return null;
+  }
+}
+
+function hasEligibleRsaPublicNumbers(
+  modulus: Uint8Array,
+  exponentBytes: Uint8Array,
+): boolean {
+  const modulusBits =
+    (modulus.length - 1) * 8 + (32 - Math.clz32(modulus[0]!));
+  if (
+    modulusBits < MIN_RSA_MODULUS_BITS ||
+    (modulus[modulus.length - 1]! & 1) === 0
+  ) {
     return false;
   }
+
+  let exponent = 0;
+  for (const byte of exponentBytes) {
+    if (
+      exponent >
+      Math.floor((Number.MAX_SAFE_INTEGER - byte) / 256)
+    ) {
+      return false;
+    }
+    exponent = exponent * 256 + byte;
+  }
+  return exponent >= 3 && exponent % 2 === 1;
 }
 
 function inspectCailJwt(token: string): InspectedJwt | null {
@@ -448,22 +475,27 @@ function containsPrivateJwkMaterial(value: Record<string, unknown>): boolean {
   return PRIVATE_JWK_PARAMETERS.some((name) => Object.hasOwn(value, name));
 }
 
-function isRsaVerificationJwkForKid(
+interface EligibleRsaVerificationJwk {
+  key: Record<string, unknown>;
+  kid: string;
+}
+
+function snapshotRsaVerificationJwk(
   value: Record<string, unknown>,
-): boolean {
+): EligibleRsaVerificationJwk | null {
   const kid = ownProp(value, "kid");
   if (
     ownProp(value, "kty") !== "RSA" ||
     typeof kid !== "string" ||
     kid === ""
   ) {
-    return false;
+    return null;
   }
 
   const alg = ownProp(value, "alg");
-  if (alg !== undefined && alg !== "RS256") return false;
+  if (alg !== undefined && alg !== "RS256") return null;
   const use = ownProp(value, "use");
-  if (use !== undefined && use !== "sig") return false;
+  if (use !== undefined && use !== "sig") return null;
   const keyOps = ownProp(value, "key_ops");
   if (keyOps !== undefined) {
     const keyOpsSnapshot = snapshotStringArray(keyOps);
@@ -472,15 +504,22 @@ function isRsaVerificationJwkForKid(
       new Set(keyOpsSnapshot).size !== keyOpsSnapshot.length ||
       !keyOpsSnapshot.includes("verify")
     ) {
-      return false;
+      return null;
     }
   }
-  if (containsPrivateJwkMaterial(value)) return false;
+  if (containsPrivateJwkMaterial(value)) return null;
 
-  return (
-    isCanonicalBase64urlUInt(ownProp(value, "n")) &&
-    isCanonicalBase64urlUInt(ownProp(value, "e"))
-  );
+  const modulus = decodeCanonicalBase64urlUInt(ownProp(value, "n"));
+  const exponent = decodeCanonicalBase64urlUInt(ownProp(value, "e"));
+  if (
+    modulus === null ||
+    exponent === null ||
+    !hasEligibleRsaPublicNumbers(modulus, exponent)
+  ) {
+    return null;
+  }
+
+  return { key: value, kid };
 }
 
 interface IdentityVerifierConfigSnapshot {
@@ -599,6 +638,7 @@ function isValidAudience(value: unknown): value is string {
   return (
     typeof value === "string" &&
     value !== "" &&
+    value.trim() !== "" &&
     !CONTROL_CHARACTER.test(value)
   );
 }
@@ -647,18 +687,18 @@ export async function loadIdentityVerifierConfig(
     return { ok: false, reason: "jwks_malformed" };
   }
 
-  const keyRecords: Record<string, unknown>[] = [];
+  const keyRecords: EligibleRsaVerificationJwk[] = [];
   const keyIds = new Set<string>();
   for (const key of keys) {
-    if (!isPlainObject(key) || !isRsaVerificationJwkForKid(key)) {
+    if (!isPlainObject(key)) {
       return { ok: false, reason: "jwks_malformed" };
     }
-    const kid = ownProp(key, "kid") as string;
-    if (keyIds.has(kid)) {
+    const eligibleKey = snapshotRsaVerificationJwk(key);
+    if (eligibleKey === null || keyIds.has(eligibleKey.kid)) {
       return { ok: false, reason: "jwks_malformed" };
     }
-    keyIds.add(kid);
-    keyRecords.push(key);
+    keyIds.add(eligibleKey.kid);
+    keyRecords.push(eligibleKey);
   }
 
   if (typeof raw.issuer !== "string" || raw.issuer === "") {
@@ -713,12 +753,12 @@ export async function loadIdentityVerifierConfig(
   freezeJsonValue(parsedJwks);
   const keysByKid = new Map<string, CryptoKey>();
   try {
-    for (const key of keyRecords) {
+    for (const { key, kid } of keyRecords) {
       const imported = await importJWK(key, "RS256");
       if (imported instanceof Uint8Array || imported.type !== "public") {
         return { ok: false, reason: "jwks_malformed" };
       }
-      keysByKid.set(ownProp(key, "kid") as string, imported);
+      keysByKid.set(kid, imported);
     }
   } catch {
     return { ok: false, reason: "jwks_malformed" };

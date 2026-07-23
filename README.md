@@ -147,13 +147,17 @@ verification requires the exact pattern `^cail-[0-9a-f]{32}$`.
 Call `loadIdentityVerifierConfig` before invoking the verifier. The loader
 reads each input option once and returns either a frozen verifier snapshot or
 a typed operator-error reason. It requires one canonical HTTPS issuer, one
-nonempty scalar audience, finite representable test time when supplied, clock
-tolerance from 0 through 300 seconds, and a nonempty JWKS. The default issuer
-authority contains only the canonical production and staging issuers; callers
-may supply an exact canonical authority list.
+non-whitespace scalar audience, finite representable test time when supplied,
+clock tolerance from 0 through 300 seconds, and a nonempty JWKS. The default
+issuer authority contains only the canonical production and staging issuers;
+callers may supply an exact canonical authority list.
 
 Every JWKS key must be an eligible public RSA RS256 signing key with canonical
-`n` and `e`, a nonempty `kid`, and no private material. Kids must be globally
+Base64urlUInt `n` and `e`, a nonempty `kid`, and no private material. The
+modulus must be an odd integer of at least 2048 bits. The exponent must be an
+odd integer from 3 through JavaScript's maximum safe integer; the normal
+`65537` exponent is accepted. These eligibility checks run before Web Crypto
+key import because import alone does not enforce them. Kids must be globally
 distinct. JWKS input is parsed from JSON so key fields have own-data semantics,
 then frozen and imported before the snapshot is returned. The verifier never
 follows `jku`, `x5u`, or any other token-controlled URL. Signature and
