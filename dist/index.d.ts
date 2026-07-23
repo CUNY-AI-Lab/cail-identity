@@ -9,13 +9,12 @@
  *     Web Crypto APIs across Cloudflare Workers, browsers, Bun, and Node >=20.
  *   - Each algorithm is PINNED in code; the token never chooses it.
  *   - Verification key material is passed in — never stored, never logged.
- *   - Fail closed: any ambiguity returns `null`. Never throws, never reveals a
- *     failure reason (no oracle).
+ *   - Invalid tokens fail closed to `null` without revealing a failure reason.
+ *     Configuration is loaded separately and remains an owned operator error.
  *   - A verified token must contain the stable pseudonymous CAIL subject.
  *   - Subject derivation is explicit and intended only for a trusted CUNY
  *     authentication boundary, never for user-controlled request data.
  */
-import { type JSONWebKeySet } from "jose";
 export interface CailIdentity {
     subject: string;
     /** Separately keyed pseudonym for privacy-bounded operational events. */
@@ -58,8 +57,8 @@ export interface DeriveCailSubjectOptions {
 /**
  * Derive the established stable pseudonymous CAIL subject.
  *
- * `cail-` + the first 32 hexadecimal characters of
- * HMAC-SHA256(subjectSalt, `${issuer}|${canonicalSubject}`).
+ * `cail-` + the first 32 hexadecimal characters of HMAC-SHA256 over the
+ * versioned, UTF-8 byte-length-prefixed ownership-subject material.
  */
 export declare function deriveCailSubject(options: DeriveCailSubjectOptions): Promise<string>;
 /**
@@ -109,59 +108,65 @@ export declare function deriveCailOperationalSubject(options: DeriveCailOperatio
  * canonicalization, because there is no upstream-IdP quirk to absorb.
  */
 export declare function deriveAppSubject(appId: string, subjectSalt: string): Promise<string>;
-/** Canonical production issuer — list it in `allowedIssuers` to accept prod. */
+/** Canonical production issuer — include it in `supportedIssuers` to accept prod. */
 export declare const CAIL_CANONICAL_ISSUER = "https://tools.ailab.gc.cuny.edu/cail-sso";
-/** Staging issuer — list it in `allowedIssuers` to accept staging. */
+/** Staging issuer — include it in `supportedIssuers` to accept staging. */
 export declare const CAIL_STAGING_ISSUER = "https://tools.cuny.qzz.io/cail-sso";
-export interface VerifyIdentityJwtOptions {
-    /** Required scalar audience value. */
-    expectedAudience: string;
-    /** Required exact-match issuer list containing exactly one value. */
-    allowedIssuers: string[];
-    /** Unix seconds "now". Default: Math.floor(Date.now() / 1000). */
-    now?: number;
-    /** Symmetric clock leeway in seconds. Default 60; maximum 300. */
-    clockToleranceSeconds?: number;
+declare const identityVerifierConfigBrand: unique symbol;
+/**
+ * Immutable verifier configuration produced only by
+ * {@link loadIdentityVerifierConfig}.
+ */
+export interface IdentityVerifierConfig {
+    readonly expectedAudience: string;
+    readonly issuer: string;
+    readonly clockToleranceSeconds: number;
+    readonly keyIds: readonly string[];
+    readonly [identityVerifierConfigBrand]: true;
 }
-/** Why an identity verification CONFIG failed to load. Operator error, not a token error. */
-export type IdentityConfigErrorReason = "jwks_missing" | "jwks_malformed" | "issuer_missing" | "issuer_unsupported";
-export interface ParseIdentityConfigInput {
+/** Why identity verification CONFIG failed to load. Operator error, not a token error. */
+export type IdentityVerifierConfigErrorReason = "jwks_missing" | "jwks_malformed" | "issuer_missing" | "issuer_unsupported" | "audience_missing" | "audience_malformed" | "timing_invalid";
+export interface LoadIdentityVerifierConfigInput {
     /** Raw JWKS JSON string, e.g. the `CAIL_IDENTITY_JWKS` environment value. */
     jwks: string | undefined;
     /** Exact expected issuer, e.g. the `CAIL_IDENTITY_ISSUER` environment value. */
     issuer: string | undefined;
-    /** Optional exact-match allowlist the configured issuer must belong to. */
+    /** Required scalar `aud` value for this service. */
+    expectedAudience: string | undefined;
+    /**
+     * Optional exact-match authority for acceptable configured issuers.
+     * Defaults to CAIL's canonical production and staging issuers.
+     */
     supportedIssuers?: readonly string[];
+    /** Test-only fixed Unix time. Production callers should omit this. */
+    now?: number;
+    /** Symmetric clock leeway in seconds. Default 60; maximum 300. */
+    clockToleranceSeconds?: number;
 }
-export type ParseIdentityConfigResult = {
+export type LoadIdentityVerifierConfigResult = {
     ok: true;
-    jwks: JSONWebKeySet;
-    issuer: string;
+    config: IdentityVerifierConfig;
 } | {
     ok: false;
-    reason: IdentityConfigErrorReason;
+    reason: IdentityVerifierConfigErrorReason;
 };
 /**
- * Parse and validate the identity VERIFICATION CONFIG (JWKS string + issuer).
+ * Load, validate, import, and snapshot the complete verifier configuration.
  *
- * This is the canonical config-error-vs-invalid-token boundary: a token that
- * fails validation against a successfully loaded JWKS is a CLIENT error (401,
- * `verifyIdentityJwt` returns null), while a server that cannot load or parse
- * its own verification config is an OPERATOR error the caller must surface as
- * 5xx (503) with a structured log — otherwise a misconfiguration presents as
- * every user's auth silently failing. (Precedent: Envoy JWT filter #41669.)
- *
- * Config-invalid is a VALUE here, never an exception: the function does not
- * throw. JWKS validation requires a JWK Set object with a `keys` array of
- * objects and rejects any private JWK parameter. An empty `keys` array is a
- * loaded (if useless) config; per-key selection remains
- * `verifyIdentityJwt`'s token-validation concern and still fails closed to
- * null.
+ * Every caller-supplied option is read at most once. JWKS data must arrive as
+ * JSON, so imported keys have own-data properties rather than live
+ * accessors/proxies. A failed load is an owned service-configuration error;
+ * callers map it to service unavailable. Only a successfully loaded snapshot
+ * may be passed to {@link verifyIdentityJwt}.
  */
-export declare function parseIdentityConfig(input: ParseIdentityConfigInput): ParseIdentityConfigResult;
+export declare function loadIdentityVerifierConfig(input: LoadIdentityVerifierConfigInput): Promise<LoadIdentityVerifierConfigResult>;
 /**
- * Verify a CAIL RS256 identity JWT against an in-memory public JWKS.
- * Any malformed, unauthorized, unsupported, or ambiguous input returns null.
+ * Verify a CAIL RS256 identity JWT using an immutable validated snapshot.
+ *
+ * Invalid tokens return `null`. Passing anything other than a snapshot from
+ * {@link loadIdentityVerifierConfig} is a programmer/configuration error and
+ * throws, so it cannot be mislabeled as invalid credentials.
  */
-export declare function verifyIdentityJwt(token: string, jwks: JSONWebKeySet, opts: VerifyIdentityJwtOptions): Promise<CailIdentity | null>;
+export declare function verifyIdentityJwt(token: string, config: IdentityVerifierConfig): Promise<CailIdentity | null>;
+export {};
 //# sourceMappingURL=index.d.ts.map

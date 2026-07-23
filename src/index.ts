@@ -9,14 +9,14 @@
  *     Web Crypto APIs across Cloudflare Workers, browsers, Bun, and Node >=20.
  *   - Each algorithm is PINNED in code; the token never chooses it.
  *   - Verification key material is passed in — never stored, never logged.
- *   - Fail closed: any ambiguity returns `null`. Never throws, never reveals a
- *     failure reason (no oracle).
+ *   - Invalid tokens fail closed to `null` without revealing a failure reason.
+ *     Configuration is loaded separately and remains an owned operator error.
  *   - A verified token must contain the stable pseudonymous CAIL subject.
  *   - Subject derivation is explicit and intended only for a trusted CUNY
  *     authentication boundary, never for user-controlled request data.
  */
 
-import { base64url, importJWK, jwtVerify, type JSONWebKeySet } from "jose";
+import { base64url, importJWK, jwtVerify } from "jose";
 
 export interface CailIdentity {
   subject: string;
@@ -43,16 +43,91 @@ const ASCII_WHITESPACE = /^[ \t\n\v\f\r]+|[ \t\n\v\f\r]+$/g;
 const ASCII_WHITESPACE_CHARACTER = /[ \t\n\v\f\r]/;
 const encoder = new TextEncoder();
 
-function assertSubjectSalt(value: unknown): asserts value is string {
+function snapshotOwnProperty(
+  value: Record<string, unknown>,
+  key: string,
+): unknown {
+  return Object.hasOwn(value, key) ? value[key] : undefined;
+}
+
+function snapshotSubjectSalt(
+  value: unknown,
+  optionName: string,
+): Uint8Array<ArrayBuffer> {
+  const bytes = typeof value === "string" ? encoder.encode(value) : null;
   if (
     typeof value !== "string" ||
     CONTROL_CHARACTER.test(value) ||
-    encoder.encode(value).byteLength < 32
+    bytes === null ||
+    bytes.byteLength < 32
   ) {
     throw new TypeError(
-      "subjectSalt must contain at least 32 UTF-8 bytes without controls.",
+      `${optionName} must contain at least 32 UTF-8 bytes without controls.`,
     );
   }
+  return bytes;
+}
+
+interface SubjectDerivationSnapshot {
+  issuer: string;
+  canonicalSubject: string;
+  saltBytes: Uint8Array<ArrayBuffer>;
+}
+
+function snapshotSubjectDerivationOptions(
+  options: unknown,
+  saltOptionName: "subjectSalt" | "operationalSubjectSalt",
+): SubjectDerivationSnapshot {
+  let issuer: unknown;
+  let oidcSubject: unknown;
+  let salt: unknown;
+  try {
+    if (typeof options !== "object" || options === null) {
+      throw new TypeError("options must be an object.");
+    }
+    const record = options as Record<string, unknown>;
+    issuer = snapshotOwnProperty(record, "issuer");
+    oidcSubject = snapshotOwnProperty(record, "oidcSubject");
+    salt = snapshotOwnProperty(record, saltOptionName);
+  } catch {
+    throw new TypeError("subject derivation options could not be read.");
+  }
+
+  if (
+    typeof issuer !== "string" ||
+    issuer === "" ||
+    CONTROL_CHARACTER.test(issuer)
+  ) {
+    throw new TypeError("issuer must be a non-empty string without controls.");
+  }
+
+  const saltBytes = snapshotSubjectSalt(salt, saltOptionName);
+  const canonicalSubject = canonicalizeCunySubject(
+    oidcSubject as string,
+  );
+  return { issuer, canonicalSubject, saltBytes };
+}
+
+const OWNERSHIP_SUBJECT_DOMAIN = "cail-identity/ownership-subject:v2";
+const OPERATIONAL_SUBJECT_DOMAIN = "cail-identity/operational-subject:v2";
+
+/**
+ * Injectively frame two UTF-8 strings for HMAC.
+ *
+ * Each field is preceded by its UTF-8 byte length, so no value can be parsed
+ * as part of an adjacent field. The fixed, versioned domain separates
+ * ownership and operational pseudonyms.
+ */
+function encodeSubjectHmacInput(
+  domain: string,
+  issuer: string,
+  canonicalSubject: string,
+): Uint8Array<ArrayBuffer> {
+  const issuerLength = encoder.encode(issuer).byteLength;
+  const subjectLength = encoder.encode(canonicalSubject).byteLength;
+  return encoder.encode(
+    `${domain}:${issuerLength}:${issuer}${subjectLength}:${canonicalSubject}`,
+  );
 }
 
 /**
@@ -111,27 +186,17 @@ function bytesToHex(bytes: Uint8Array): string {
 /**
  * Derive the established stable pseudonymous CAIL subject.
  *
- * `cail-` + the first 32 hexadecimal characters of
- * HMAC-SHA256(subjectSalt, `${issuer}|${canonicalSubject}`).
+ * `cail-` + the first 32 hexadecimal characters of HMAC-SHA256 over the
+ * versioned, UTF-8 byte-length-prefixed ownership-subject material.
  */
 export async function deriveCailSubject(
   options: DeriveCailSubjectOptions,
 ): Promise<string> {
-  if (
-    typeof options !== "object" ||
-    options === null ||
-    typeof options.issuer !== "string" ||
-    options.issuer === "" ||
-    CONTROL_CHARACTER.test(options.issuer)
-  ) {
-    throw new TypeError("issuer must be a non-empty string without controls.");
-  }
-  assertSubjectSalt(options.subjectSalt);
-
-  const canonical = canonicalizeCunySubject(options.oidcSubject);
+  const { issuer, canonicalSubject, saltBytes } =
+    snapshotSubjectDerivationOptions(options, "subjectSalt");
   const key = await crypto.subtle.importKey(
     "raw",
-    encoder.encode(options.subjectSalt),
+    saltBytes,
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign"],
@@ -140,7 +205,11 @@ export async function deriveCailSubject(
     await crypto.subtle.sign(
       "HMAC",
       key,
-      encoder.encode(`${options.issuer}|${canonical}`),
+      encodeSubjectHmacInput(
+        OWNERSHIP_SUBJECT_DOMAIN,
+        issuer,
+        canonicalSubject,
+      ),
     ),
   );
   return `cail-${bytesToHex(digest).slice(0, 32)}`;
@@ -199,20 +268,11 @@ export interface DeriveCailOperationalSubjectOptions {
 export async function deriveCailOperationalSubject(
   options: DeriveCailOperationalSubjectOptions,
 ): Promise<string> {
-  if (
-    typeof options !== "object" ||
-    options === null ||
-    typeof options.issuer !== "string" ||
-    options.issuer === "" ||
-    CONTROL_CHARACTER.test(options.issuer)
-  ) {
-    throw new TypeError("issuer must be a non-empty string without controls.");
-  }
-  assertSubjectSalt(options.operationalSubjectSalt);
-  const canonical = canonicalizeCunySubject(options.oidcSubject);
+  const { issuer, canonicalSubject, saltBytes } =
+    snapshotSubjectDerivationOptions(options, "operationalSubjectSalt");
   const key = await crypto.subtle.importKey(
     "raw",
-    encoder.encode(options.operationalSubjectSalt),
+    saltBytes,
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign"],
@@ -221,7 +281,11 @@ export async function deriveCailOperationalSubject(
     await crypto.subtle.sign(
       "HMAC",
       key,
-      encoder.encode(`operational-log:v1|${options.issuer}|${canonical}`),
+      encodeSubjectHmacInput(
+        OPERATIONAL_SUBJECT_DOMAIN,
+        issuer,
+        canonicalSubject,
+      ),
     ),
   );
   return `cail-v1-${bytesToHex(digest).slice(0, 32)}`;
@@ -253,11 +317,11 @@ export async function deriveAppSubject(
       "appId must be a non-empty string without control characters or edge whitespace.",
     );
   }
-  assertSubjectSalt(subjectSalt);
+  const saltBytes = snapshotSubjectSalt(subjectSalt, "subjectSalt");
 
   const key = await crypto.subtle.importKey(
     "raw",
-    encoder.encode(subjectSalt),
+    saltBytes,
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign"],
@@ -268,9 +332,9 @@ export async function deriveAppSubject(
   return `app-${bytesToHex(digest).slice(0, 32)}`;
 }
 
-/** Canonical production issuer — list it in `allowedIssuers` to accept prod. */
+/** Canonical production issuer — include it in `supportedIssuers` to accept prod. */
 export const CAIL_CANONICAL_ISSUER = "https://tools.ailab.gc.cuny.edu/cail-sso";
-/** Staging issuer — list it in `allowedIssuers` to accept staging. */
+/** Staging issuer — include it in `supportedIssuers` to accept staging. */
 export const CAIL_STAGING_ISSUER = "https://tools.cuny.qzz.io/cail-sso";
 
 // fatal:true — RFC 7519 §7.2 / RFC 8725 §3.7 require the header and payload
@@ -296,18 +360,8 @@ interface InspectedJwt {
   payload: Record<string, unknown>;
 }
 
-export interface VerifyIdentityJwtOptions {
-  /** Required scalar audience value. */
-  expectedAudience: string;
-  /** Required exact-match issuer list containing exactly one value. */
-  allowedIssuers: string[];
-  /** Unix seconds "now". Default: Math.floor(Date.now() / 1000). */
-  now?: number;
-  /** Symmetric clock leeway in seconds. Default 60; maximum 300. */
-  clockToleranceSeconds?: number;
-}
-
 const MAX_CLOCK_TOLERANCE_SECONDS = 300;
+const MAX_DATE_SECONDS = 8_640_000_000_000;
 
 function isCanonicalBase64url(value: unknown): value is string {
   if (typeof value !== "string" || value === "") return false;
@@ -357,12 +411,22 @@ function inspectCailJwt(token: string): InspectedJwt | null {
   }
 }
 
-function isUniqueNonemptyStringArray(value: unknown): value is string[] {
-  if (!Array.isArray(value) || value.length === 0) return false;
-  if (!value.every((item) => typeof item === "string" && item !== "")) {
-    return false;
+function snapshotStringArray(value: unknown): string[] | null {
+  try {
+    if (!Array.isArray(value)) return null;
+    const length: unknown = value.length;
+    if (!Number.isSafeInteger(length) || (length as number) < 1) return null;
+    const snapshot: string[] = [];
+    for (let index = 0; index < (length as number); index += 1) {
+      if (!Object.hasOwn(value, index)) return null;
+      const item: unknown = value[index];
+      if (typeof item !== "string" || item === "") return null;
+      snapshot.push(item);
+    }
+    return snapshot;
+  } catch {
+    return null;
   }
-  return new Set(value).size === value.length;
 }
 
 function hasExactAudience(value: unknown, expected: string): boolean {
@@ -386,9 +450,13 @@ function containsPrivateJwkMaterial(value: Record<string, unknown>): boolean {
 
 function isRsaVerificationJwkForKid(
   value: Record<string, unknown>,
-  kid: string,
 ): boolean {
-  if (ownProp(value, "kty") !== "RSA" || ownProp(value, "kid") !== kid) {
+  const kid = ownProp(value, "kid");
+  if (
+    ownProp(value, "kty") !== "RSA" ||
+    typeof kid !== "string" ||
+    kid === ""
+  ) {
     return false;
   }
 
@@ -397,11 +465,15 @@ function isRsaVerificationJwkForKid(
   const use = ownProp(value, "use");
   if (use !== undefined && use !== "sig") return false;
   const keyOps = ownProp(value, "key_ops");
-  if (
-    keyOps !== undefined &&
-    (!isUniqueNonemptyStringArray(keyOps) || !keyOps.includes("verify"))
-  ) {
-    return false;
+  if (keyOps !== undefined) {
+    const keyOpsSnapshot = snapshotStringArray(keyOps);
+    if (
+      keyOpsSnapshot === null ||
+      new Set(keyOpsSnapshot).size !== keyOpsSnapshot.length ||
+      !keyOpsSnapshot.includes("verify")
+    ) {
+      return false;
+    }
   }
   if (containsPrivateJwkMaterial(value)) return false;
 
@@ -411,62 +483,275 @@ function isRsaVerificationJwkForKid(
   );
 }
 
+interface IdentityVerifierConfigSnapshot {
+  expectedAudience: string;
+  issuer: string;
+  now: number | undefined;
+  clockToleranceSeconds: number;
+  keysByKid: ReadonlyMap<string, CryptoKey>;
+}
+
+declare const identityVerifierConfigBrand: unique symbol;
+
+/**
+ * Immutable verifier configuration produced only by
+ * {@link loadIdentityVerifierConfig}.
+ */
+export interface IdentityVerifierConfig {
+  readonly expectedAudience: string;
+  readonly issuer: string;
+  readonly clockToleranceSeconds: number;
+  readonly keyIds: readonly string[];
+  readonly [identityVerifierConfigBrand]: true;
+}
+
+const identityVerifierConfigSnapshots = new WeakMap<
+  IdentityVerifierConfig,
+  IdentityVerifierConfigSnapshot
+>();
+
+/** Why identity verification CONFIG failed to load. Operator error, not a token error. */
+export type IdentityVerifierConfigErrorReason =
+  | "jwks_missing"
+  | "jwks_malformed"
+  | "issuer_missing"
+  | "issuer_unsupported"
+  | "audience_missing"
+  | "audience_malformed"
+  | "timing_invalid";
+
+export interface LoadIdentityVerifierConfigInput {
+  /** Raw JWKS JSON string, e.g. the `CAIL_IDENTITY_JWKS` environment value. */
+  jwks: string | undefined;
+  /** Exact expected issuer, e.g. the `CAIL_IDENTITY_ISSUER` environment value. */
+  issuer: string | undefined;
+  /** Required scalar `aud` value for this service. */
+  expectedAudience: string | undefined;
+  /**
+   * Optional exact-match authority for acceptable configured issuers.
+   * Defaults to CAIL's canonical production and staging issuers.
+   */
+  supportedIssuers?: readonly string[];
+  /** Test-only fixed Unix time. Production callers should omit this. */
+  now?: number;
+  /** Symmetric clock leeway in seconds. Default 60; maximum 300. */
+  clockToleranceSeconds?: number;
+}
+
+export type LoadIdentityVerifierConfigResult =
+  | { ok: true; config: IdentityVerifierConfig }
+  | { ok: false; reason: IdentityVerifierConfigErrorReason };
+
+interface RawVerifierConfigOptions {
+  jwks: unknown;
+  issuer: unknown;
+  expectedAudience: unknown;
+  supportedIssuers: unknown;
+  now: unknown;
+  clockToleranceSeconds: unknown;
+}
+
+function snapshotVerifierConfigOptions(
+  input: unknown,
+): RawVerifierConfigOptions | null {
+  try {
+    if (!isPlainObject(input)) return null;
+    return {
+      jwks: snapshotOwnProperty(input, "jwks"),
+      issuer: snapshotOwnProperty(input, "issuer"),
+      expectedAudience: snapshotOwnProperty(input, "expectedAudience"),
+      supportedIssuers: snapshotOwnProperty(input, "supportedIssuers"),
+      now: snapshotOwnProperty(input, "now"),
+      clockToleranceSeconds: snapshotOwnProperty(
+        input,
+        "clockToleranceSeconds",
+      ),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isCanonicalIssuer(value: string): boolean {
+  if (
+    value === "" ||
+    ASCII_WHITESPACE_CHARACTER.test(value) ||
+    CONTROL_CHARACTER.test(value)
+  ) {
+    return false;
+  }
+  try {
+    const parsed = new URL(value);
+    return (
+      parsed.protocol === "https:" &&
+      parsed.username === "" &&
+      parsed.password === "" &&
+      parsed.search === "" &&
+      parsed.hash === "" &&
+      parsed.href === value
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isValidAudience(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value !== "" &&
+    !CONTROL_CHARACTER.test(value)
+  );
+}
+
+function freezeJsonValue(value: unknown): void {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value)) {
+    return;
+  }
+  for (const child of Object.values(value)) freezeJsonValue(child);
+  Object.freeze(value);
+}
+
+/**
+ * Load, validate, import, and snapshot the complete verifier configuration.
+ *
+ * Every caller-supplied option is read at most once. JWKS data must arrive as
+ * JSON, so imported keys have own-data properties rather than live
+ * accessors/proxies. A failed load is an owned service-configuration error;
+ * callers map it to service unavailable. Only a successfully loaded snapshot
+ * may be passed to {@link verifyIdentityJwt}.
+ */
+export async function loadIdentityVerifierConfig(
+  input: LoadIdentityVerifierConfigInput,
+): Promise<LoadIdentityVerifierConfigResult> {
+  const raw = snapshotVerifierConfigOptions(input);
+  if (raw === null) return { ok: false, reason: "jwks_missing" };
+
+  if (
+    typeof raw.jwks !== "string" ||
+    raw.jwks.replace(ASCII_WHITESPACE, "") === ""
+  ) {
+    return { ok: false, reason: "jwks_missing" };
+  }
+
+  let parsedJwks: unknown;
+  try {
+    parsedJwks = JSON.parse(raw.jwks);
+  } catch {
+    return { ok: false, reason: "jwks_malformed" };
+  }
+  if (!isPlainObject(parsedJwks)) {
+    return { ok: false, reason: "jwks_malformed" };
+  }
+  const keys = ownProp(parsedJwks, "keys");
+  if (!Array.isArray(keys) || keys.length === 0) {
+    return { ok: false, reason: "jwks_malformed" };
+  }
+
+  const keyRecords: Record<string, unknown>[] = [];
+  const keyIds = new Set<string>();
+  for (const key of keys) {
+    if (!isPlainObject(key) || !isRsaVerificationJwkForKid(key)) {
+      return { ok: false, reason: "jwks_malformed" };
+    }
+    const kid = ownProp(key, "kid") as string;
+    if (keyIds.has(kid)) {
+      return { ok: false, reason: "jwks_malformed" };
+    }
+    keyIds.add(kid);
+    keyRecords.push(key);
+  }
+
+  if (typeof raw.issuer !== "string" || raw.issuer === "") {
+    return { ok: false, reason: "issuer_missing" };
+  }
+  if (!isCanonicalIssuer(raw.issuer)) {
+    return { ok: false, reason: "issuer_unsupported" };
+  }
+
+  let supportedIssuers: string[];
+  if (raw.supportedIssuers === undefined) {
+    supportedIssuers = [CAIL_CANONICAL_ISSUER, CAIL_STAGING_ISSUER];
+  } else {
+    const snapshot = snapshotStringArray(raw.supportedIssuers);
+    if (
+      snapshot === null ||
+      new Set(snapshot).size !== snapshot.length ||
+      !snapshot.every(isCanonicalIssuer)
+    ) {
+      return { ok: false, reason: "issuer_unsupported" };
+    }
+    supportedIssuers = snapshot;
+  }
+  if (!supportedIssuers.includes(raw.issuer)) {
+    return { ok: false, reason: "issuer_unsupported" };
+  }
+
+  if (raw.expectedAudience === undefined || raw.expectedAudience === "") {
+    return { ok: false, reason: "audience_missing" };
+  }
+  if (!isValidAudience(raw.expectedAudience)) {
+    return { ok: false, reason: "audience_malformed" };
+  }
+
+  const now = raw.now;
+  if (
+    now !== undefined &&
+    (!isFiniteNumber(now) || Math.abs(now) > MAX_DATE_SECONDS)
+  ) {
+    return { ok: false, reason: "timing_invalid" };
+  }
+  const clockToleranceSeconds =
+    raw.clockToleranceSeconds === undefined ? 60 : raw.clockToleranceSeconds;
+  if (
+    !isFiniteNumber(clockToleranceSeconds) ||
+    clockToleranceSeconds < 0 ||
+    clockToleranceSeconds > MAX_CLOCK_TOLERANCE_SECONDS
+  ) {
+    return { ok: false, reason: "timing_invalid" };
+  }
+
+  freezeJsonValue(parsedJwks);
+  const keysByKid = new Map<string, CryptoKey>();
+  try {
+    for (const key of keyRecords) {
+      const imported = await importJWK(key, "RS256");
+      if (imported instanceof Uint8Array || imported.type !== "public") {
+        return { ok: false, reason: "jwks_malformed" };
+      }
+      keysByKid.set(ownProp(key, "kid") as string, imported);
+    }
+  } catch {
+    return { ok: false, reason: "jwks_malformed" };
+  }
+
+  const config = Object.freeze({
+    expectedAudience: raw.expectedAudience,
+    issuer: raw.issuer,
+    clockToleranceSeconds,
+    keyIds: Object.freeze([...keyIds]),
+  }) as unknown as IdentityVerifierConfig;
+  identityVerifierConfigSnapshots.set(config, {
+    expectedAudience: raw.expectedAudience,
+    issuer: raw.issuer,
+    now: now as number | undefined,
+    clockToleranceSeconds,
+    keysByKid,
+  });
+  return { ok: true, config };
+}
+
 async function verifyIdentityJwtInternal(
   token: string,
-  jwks: JSONWebKeySet,
-  opts: VerifyIdentityJwtOptions,
+  config: IdentityVerifierConfigSnapshot,
 ): Promise<CailIdentity | null> {
-  if (typeof token !== "string" || !isPlainObject(jwks) || !isPlainObject(opts)) {
-    return null;
-  }
-
-  const expectedAudience = ownProp(opts, "expectedAudience");
-  const allowedIssuers = ownProp(opts, "allowedIssuers");
-  if (typeof expectedAudience !== "string" || expectedAudience === "") {
-    return null;
-  }
-  if (
-    !isUniqueNonemptyStringArray(allowedIssuers) ||
-    allowedIssuers.length !== 1
-  ) {
-    return null;
-  }
-  const expectedIssuer = allowedIssuers[0]!;
-
-  const nowOption = ownProp(opts, "now");
-  const now =
-    nowOption === undefined ? Math.floor(Date.now() / 1000) : nowOption;
-  if (!isFiniteNumber(now)) return null;
-
-  const toleranceOption = ownProp(opts, "clockToleranceSeconds");
-  const tolerance = toleranceOption === undefined ? 60 : toleranceOption;
-  if (
-    !isFiniteNumber(tolerance) ||
-    tolerance < 0 ||
-    tolerance > MAX_CLOCK_TOLERANCE_SECONDS
-  ) {
-    return null;
-  }
-
-  const keys = ownProp(jwks, "keys");
-  if (
-    !Array.isArray(keys) ||
-    !keys.every(
-      (key): key is Record<string, unknown> =>
-        isPlainObject(key) && !containsPrivateJwkMaterial(key),
-    )
-  ) {
-    return null;
-  }
+  if (typeof token !== "string") return null;
 
   const inspected = inspectCailJwt(token);
   if (!inspected) return null;
 
   const kid = ownProp(inspected.header, "kid") as string;
-  const candidates = keys.filter((key) =>
-    isRsaVerificationJwkForKid(key, kid),
-  );
-  if (candidates.length !== 1) return null;
+  const key = config.keysByKid.get(kid);
+  if (key === undefined) return null;
 
   const exp = ownProp(inspected.payload, "exp");
   const aud = ownProp(inspected.payload, "aud");
@@ -474,11 +759,11 @@ async function verifyIdentityJwtInternal(
   const nbf = ownProp(inspected.payload, "nbf");
   const sub = ownProp(inspected.payload, "sub");
   if (!isFiniteNumber(exp)) return null;
-  if (!hasExactAudience(aud, expectedAudience)) return null;
+  if (!hasExactAudience(aud, config.expectedAudience)) return null;
   if (
     typeof iss !== "string" ||
     iss === "" ||
-    iss !== expectedIssuer
+    iss !== config.issuer
   ) {
     return null;
   }
@@ -486,15 +771,14 @@ async function verifyIdentityJwtInternal(
   if (!isCailSubject(sub)) return null;
 
   try {
-    const key = await importJWK(candidates[0]!, "RS256");
-    if (key instanceof Uint8Array || key.type !== "public") return null;
     await jwtVerify(token, key, {
       algorithms: ["RS256"],
-      audience: expectedAudience,
-      issuer: expectedIssuer,
+      audience: config.expectedAudience,
+      issuer: config.issuer,
       requiredClaims: ["exp", "sub"],
-      clockTolerance: tolerance,
-      currentDate: new Date(now * 1000),
+      clockTolerance: config.clockToleranceSeconds,
+      currentDate:
+        config.now === undefined ? new Date() : new Date(config.now * 1000),
     });
   } catch {
     return null;
@@ -523,139 +807,25 @@ async function verifyIdentityJwtInternal(
   };
 }
 
-/** Why an identity verification CONFIG failed to load. Operator error, not a token error. */
-export type IdentityConfigErrorReason =
-  | "jwks_missing"
-  | "jwks_malformed"
-  | "issuer_missing"
-  | "issuer_unsupported";
-
-export interface ParseIdentityConfigInput {
-  /** Raw JWKS JSON string, e.g. the `CAIL_IDENTITY_JWKS` environment value. */
-  jwks: string | undefined;
-  /** Exact expected issuer, e.g. the `CAIL_IDENTITY_ISSUER` environment value. */
-  issuer: string | undefined;
-  /** Optional exact-match allowlist the configured issuer must belong to. */
-  supportedIssuers?: readonly string[];
-}
-
-export type ParseIdentityConfigResult =
-  | { ok: true; jwks: JSONWebKeySet; issuer: string }
-  | { ok: false; reason: IdentityConfigErrorReason };
-
 /**
- * Parse and validate the identity VERIFICATION CONFIG (JWKS string + issuer).
+ * Verify a CAIL RS256 identity JWT using an immutable validated snapshot.
  *
- * This is the canonical config-error-vs-invalid-token boundary: a token that
- * fails validation against a successfully loaded JWKS is a CLIENT error (401,
- * `verifyIdentityJwt` returns null), while a server that cannot load or parse
- * its own verification config is an OPERATOR error the caller must surface as
- * 5xx (503) with a structured log — otherwise a misconfiguration presents as
- * every user's auth silently failing. (Precedent: Envoy JWT filter #41669.)
- *
- * Config-invalid is a VALUE here, never an exception: the function does not
- * throw. JWKS validation requires a JWK Set object with a `keys` array of
- * objects and rejects any private JWK parameter. An empty `keys` array is a
- * loaded (if useless) config; per-key selection remains
- * `verifyIdentityJwt`'s token-validation concern and still fails closed to
- * null.
- */
-export function parseIdentityConfig(
-  input: ParseIdentityConfigInput,
-): ParseIdentityConfigResult {
-  try {
-    if (!isPlainObject(input)) return { ok: false, reason: "jwks_missing" };
-  } catch {
-    return { ok: false, reason: "jwks_missing" };
-  }
-
-  let rawJwks: unknown;
-  try {
-    rawJwks = ownProp(input, "jwks");
-  } catch {
-    return { ok: false, reason: "jwks_missing" };
-  }
-  if (typeof rawJwks !== "string" || rawJwks.replace(ASCII_WHITESPACE, "") === "") {
-    return { ok: false, reason: "jwks_missing" };
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(rawJwks);
-  } catch {
-    return { ok: false, reason: "jwks_malformed" };
-  }
-  if (!isPlainObject(parsed)) return { ok: false, reason: "jwks_malformed" };
-  const keys = ownProp(parsed, "keys");
-  if (
-    !Array.isArray(keys) ||
-    !keys.every(
-      (key): key is Record<string, unknown> =>
-        isPlainObject(key) && !containsPrivateJwkMaterial(key),
-    )
-  ) {
-    return { ok: false, reason: "jwks_malformed" };
-  }
-
-  let issuer: unknown;
-  try {
-    issuer = ownProp(input, "issuer");
-  } catch {
-    return { ok: false, reason: "issuer_missing" };
-  }
-  if (
-    typeof issuer !== "string" ||
-    issuer.replace(ASCII_WHITESPACE, "") === ""
-  ) {
-    return { ok: false, reason: "issuer_missing" };
-  }
-  if (
-    ASCII_WHITESPACE_CHARACTER.test(issuer) ||
-    CONTROL_CHARACTER.test(issuer)
-  ) {
-    return { ok: false, reason: "issuer_unsupported" };
-  }
-
-  let supportedIssuers: unknown;
-  try {
-    supportedIssuers = ownProp(input, "supportedIssuers");
-  } catch {
-    return { ok: false, reason: "issuer_unsupported" };
-  }
-  if (supportedIssuers !== undefined) {
-    try {
-      const canonicalAllowlist =
-        isUniqueNonemptyStringArray(supportedIssuers) &&
-        supportedIssuers.every(
-          (value) =>
-            !ASCII_WHITESPACE_CHARACTER.test(value) &&
-            !CONTROL_CHARACTER.test(value),
-        );
-      if (
-        !canonicalAllowlist ||
-        !Array.prototype.includes.call(supportedIssuers, issuer)
-      ) {
-        return { ok: false, reason: "issuer_unsupported" };
-      }
-    } catch {
-      return { ok: false, reason: "issuer_unsupported" };
-    }
-  }
-
-  return { ok: true, jwks: parsed as unknown as JSONWebKeySet, issuer };
-}
-
-/**
- * Verify a CAIL RS256 identity JWT against an in-memory public JWKS.
- * Any malformed, unauthorized, unsupported, or ambiguous input returns null.
+ * Invalid tokens return `null`. Passing anything other than a snapshot from
+ * {@link loadIdentityVerifierConfig} is a programmer/configuration error and
+ * throws, so it cannot be mislabeled as invalid credentials.
  */
 export async function verifyIdentityJwt(
   token: string,
-  jwks: JSONWebKeySet,
-  opts: VerifyIdentityJwtOptions,
+  config: IdentityVerifierConfig,
 ): Promise<CailIdentity | null> {
+  const snapshot = identityVerifierConfigSnapshots.get(config);
+  if (snapshot === undefined) {
+    throw new TypeError(
+      "config must be a snapshot returned by loadIdentityVerifierConfig.",
+    );
+  }
   try {
-    return await verifyIdentityJwtInternal(token, jwks, opts);
+    return await verifyIdentityJwtInternal(token, snapshot);
   } catch {
     return null;
   }

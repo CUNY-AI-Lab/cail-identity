@@ -7,6 +7,7 @@ import {
   deriveCailSubject,
   isAppSubject,
   isCailSubject,
+  loadIdentityVerifierConfig,
   verifyIdentityJwt,
 } from "@cuny-ai-lab/cail-identity";
 import { makeRsaFixture, mintRsaJwt, type RsaFixture } from "./fixtures.js";
@@ -38,6 +39,7 @@ function claims(aud: unknown = AUD) {
 describe("published package entry", () => {
   it("exports the canonical verifier and issuer constants", () => {
     expect(verifyIdentityJwt).toBeTypeOf("function");
+    expect(loadIdentityVerifierConfig).toBeTypeOf("function");
     expect(deriveCailSubject).toBeTypeOf("function");
     expect(isCailSubject).toBeTypeOf("function");
     expect(deriveAppSubject).toBeTypeOf("function");
@@ -59,23 +61,28 @@ describe("published package entry", () => {
     });
   });
 
-  it("fails closed for ambiguous issuer and audience configuration", async () => {
+  it("separates invalid token audience from invalid verifier configuration", async () => {
     const arrayAudience = await mintRsaJwt(claims([AUD]), fixture);
-    const multipleIssuers = await mintRsaJwt(claims(), fixture);
+    const loaded = await loadIdentityVerifierConfig({
+      jwks: JSON.stringify(fixture.jwks),
+      issuer: CAIL_CANONICAL_ISSUER,
+      expectedAudience: AUD,
+      now: NOW,
+    });
+    expect(loaded.ok).toBe(true);
+    if (!loaded.ok) return;
 
     await expect(
-      verifyIdentityJwt(arrayAudience, fixture.jwks, {
-        expectedAudience: AUD,
-        allowedIssuers: [CAIL_CANONICAL_ISSUER],
-        now: NOW,
-      }),
+      verifyIdentityJwt(arrayAudience, loaded.config),
     ).resolves.toBeNull();
     await expect(
-      verifyIdentityJwt(multipleIssuers, fixture.jwks, {
+      loadIdentityVerifierConfig({
+        jwks: JSON.stringify(fixture.jwks),
+        issuer: CAIL_CANONICAL_ISSUER,
         expectedAudience: AUD,
-        allowedIssuers: [CAIL_CANONICAL_ISSUER, CAIL_STAGING_ISSUER],
+        supportedIssuers: [CAIL_CANONICAL_ISSUER, CAIL_CANONICAL_ISSUER],
         now: NOW,
       }),
-    ).resolves.toBeNull();
+    ).resolves.toEqual({ ok: false, reason: "issuer_unsupported" });
   });
 });

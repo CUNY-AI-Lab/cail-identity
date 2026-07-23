@@ -30,7 +30,7 @@ Configure authentication outside the repository, for example in the user's
 ```
 
 These are registry configuration files that Bun reads; no npm CLI is required.
-Pin an exact release, for example `"@cuny-ai-lab/cail-identity": "4.6.0"`, then
+Pin an exact release, for example `"@cuny-ai-lab/cail-identity": "5.0.0"`, then
 run `bun install` with `NODE_AUTH_TOKEN` set to a
 [classic GitHub PAT](https://docs.github.com/en/packages/learn-github-packages/introduction-to-github-packages#authenticating-to-github-packages)
 that has `read:packages`. CI may supply the same environment variable from a
@@ -52,20 +52,33 @@ const subject = await deriveCailSubject({
 });
 ```
 
-The established algorithm is:
+The v2 algorithm is:
 
 1. Trim ASCII edge whitespace and uppercase ASCII letters in the trusted OIDC
    subject.
 2. Remove one trailing `@LOGIN.CUNY.EDU` realm.
-3. Compute `HMAC-SHA256(subjectSalt, issuer + "|" + canonicalSubject)`.
-4. Return `cail-` followed by the first 32 lowercase hexadecimal characters.
+3. Frame the issuer and canonical subject injectively as
+   `cail-identity/ownership-subject:v2:` followed by each value's UTF-8 byte
+   length and value.
+4. Compute `HMAC-SHA256(subjectSalt, framedMaterial)`.
+5. Return `cail-` followed by the first 32 lowercase hexadecimal characters.
 
 This function does not authenticate its input. Call it only with a subject
 obtained from a verified CUNY token or trusted user-info response. The salt is a
 server secret containing at least 32 UTF-8 bytes, matching the gateway's
-minimum. The issuer namespaces otherwise identical subjects. Inputs that
-canonicalize to empty or retain an ASCII control character are rejected; the
-Lua and TypeScript output vectors cover the accepted production CUNY shapes.
+minimum. The salt and all options are read once and the exact validated salt
+bytes are passed to Web Crypto. The issuer namespaces otherwise identical
+subjects. Inputs that canonicalize to empty or retain an ASCII control
+character are rejected; the Lua and TypeScript output vectors cover the
+accepted production CUNY shapes.
+
+The v2 framing intentionally changes every derived user ownership ID from the
+delimiter-based v1 result. The package contains no migration, aliasing,
+backfill, or dual-read claim, and no live gateway or stored ownership data has
+adopted v2 through this change. Producers and consumers must coordinate a
+separate migration before publication or deployment. They can use
+`contract/subject-derivation-v2.json` and the adjacent Lua reference to compare
+their implementations. The v2 package patch does not edit a consumer.
 
 ## Stable app-principal subject (ADR-0007)
 
@@ -91,14 +104,19 @@ the user-subject derivation salt.
 ```ts
 import {
   CAIL_CANONICAL_ISSUER,
+  loadIdentityVerifierConfig,
   verifyIdentityJwt,
 } from "@cuny-ai-lab/cail-identity";
 
-const identity = await verifyIdentityJwt(token, publicJwks, {
+const loaded = await loadIdentityVerifierConfig({
+  jwks: env.CAIL_IDENTITY_JWKS,
+  issuer: env.CAIL_IDENTITY_ISSUER,
   expectedAudience: "cail:agent-studio",
-  allowedIssuers: [CAIL_CANONICAL_ISSUER],
+  supportedIssuers: [CAIL_CANONICAL_ISSUER],
 });
+if (!loaded.ok) return new Response("Service Unavailable", { status: 503 });
 
+const identity = await verifyIdentityJwt(token, loaded.config);
 if (!identity) return new Response("Unauthorized", { status: 401 });
 ```
 
@@ -116,35 +134,38 @@ type CailIdentity = {
 
 `operationalSubject` comes only from a validated `log_sub` claim. The trusted
 identity boundary derives it with `deriveCailOperationalSubject` using a
-dedicated salt and the domain-separated operational-log v1 input. It is not a
-reversible prefix change from `subject`. Services that did not receive this
-claim omit subject-bearing operational events rather than inventing a
-conversion.
+dedicated salt and the injective
+`cail-identity/operational-subject:v2` input domain. It is not a reversible
+prefix change from `subject`. Services that did not receive this claim omit
+subject-bearing operational events rather than inventing a conversion.
 
 In the TypeScript declaration `subject` remains `string`, but runtime
 verification requires the exact pattern `^cail-[0-9a-f]{32}$`.
 
 ## Verification contract
 
-The verifier accepts exactly one configured issuer and one scalar audience. It
-requires a canonical three-part JWT, `alg: "RS256"`, a nonempty `kid`, a finite
-`exp`, an optional finite `nbf`, and the canonical CAIL subject. Issuer and
-audience comparisons are exact and case-sensitive. Clock tolerance defaults to
-60 seconds and may be configured from 0 through 300 seconds; larger values fail
-closed rather than silently weakening expiration and not-before checks.
-Unencoded-payload (`b64: false`) JWTs and critical header extensions are not
-part of the identity profile.
+Call `loadIdentityVerifierConfig` before invoking the verifier. The loader
+reads each input option once and returns either a frozen verifier snapshot or
+a typed operator-error reason. It requires one canonical HTTPS issuer, one
+nonempty scalar audience, finite representable test time when supplied, clock
+tolerance from 0 through 300 seconds, and a nonempty JWKS. The default issuer
+authority contains only the canonical production and staging issuers; callers
+may supply an exact canonical authority list.
 
-The supplied JWKS must contain exactly one eligible public RSA verification key
-for the token's `kid`. The verifier never follows `jku`, `x5u`, or any other
-token-controlled URL. It rejects private JWK parameters (including symmetric
-`k` material) and non-minimal RSA Base64urlUInt encodings before importing the
-key. Signature and registered-claim verification use
+Every JWKS key must be an eligible public RSA RS256 signing key with canonical
+`n` and `e`, a nonempty `kid`, and no private material. Kids must be globally
+distinct. JWKS input is parsed from JSON so key fields have own-data semantics,
+then frozen and imported before the snapshot is returned. The verifier never
+follows `jku`, `x5u`, or any other token-controlled URL. Signature and
+registered-claim verification use
 [`jose`](https://github.com/panva/jose).
 
-Every malformed input, verification failure, configuration error, or
-unexpected exception resolves to `null`. The verifier does not expose a
-failure oracle and performs no network access, JWKS refresh, logging, or token
+With a valid snapshot, the verifier accepts a canonical three-part JWT with
+`alg: "RS256"`, a known nonempty `kid`, finite `exp`, optional finite `nbf`,
+the exact scalar audience and issuer, and a canonical CAIL subject. Invalid
+tokens resolve to `null` without exposing a failure oracle. Passing a
+forged/non-loader config throws a configuration error.
+The verifier performs no network access, JWKS refresh, logging, or token
 minting.
 
 Callers own bounded JWKS loading and rotation. Publish old and new public keys
@@ -153,39 +174,32 @@ the old key after issued tokens and clock tolerance have expired.
 
 ## Config errors are not token errors
 
-`parseIdentityConfig` owns the other side of that boundary: loading the
-verification config itself. A token that fails against a successfully loaded
-JWKS is a client error (`verifyIdentityJwt` → `null` → 401). A service that
-cannot load or parse its own config — unset or malformed `CAIL_IDENTITY_JWKS`,
-missing or unsupported issuer — is an operator error the caller must surface
-as 503 with a structured log, or a misconfiguration presents as every user's
-auth silently failing.
+The loader validates audience and timing along with the issuer and JWKS. A
+token that fails against a successfully loaded snapshot is a client error
+(`verifyIdentityJwt` → `null` → 401). A service that cannot load its config is
+an operator error the caller must surface as 503 with a structured log, or a
+misconfiguration presents as every user's auth silently failing.
 
 ```ts
-import { parseIdentityConfig } from "@cuny-ai-lab/cail-identity";
+import { loadIdentityVerifierConfig } from "@cuny-ai-lab/cail-identity";
 
-const config = parseIdentityConfig({
+const loaded = await loadIdentityVerifierConfig({
   jwks: env.CAIL_IDENTITY_JWKS,
   issuer: env.CAIL_IDENTITY_ISSUER,
+  expectedAudience: "cail:agent-studio",
   supportedIssuers: [CAIL_CANONICAL_ISSUER, CAIL_STAGING_ISSUER], // optional
 });
-if (!config.ok) {
-  // config.reason: "jwks_missing" | "jwks_malformed" | "issuer_missing" | "issuer_unsupported"
+if (!loaded.ok) {
+  // Includes JWKS, issuer, audience, and timing config-error reasons.
   return new Response("Service Unavailable", { status: 503 });
 }
-const identity = await verifyIdentityJwt(token, config.jwks, {
-  expectedAudience: "cail:agent-studio",
-  allowedIssuers: [config.issuer],
-});
+const identity = await verifyIdentityJwt(token, loaded.config);
 ```
 
-The helper never throws — config-invalid is a returned value. Validation
-requires a JWK Set object with a `keys` array of objects containing no private
-JWK parameters and a canonical, exact issuer; private parameters make the JWKS
-malformed. An empty `keys` array is still a loaded config, and per-`kid` public
-RSA key eligibility remains token validation. If `supportedIssuers` is
-supplied, it must itself be a unique nonempty array of canonical issuer
-strings.
+The loader returns config-invalid as a value and does not throw for invalid
+caller input. Empty JWKS, empty objects, duplicate kids, private keys, and structurally
+ineligible keys are configuration failures. Per-token unknown kids and bad
+signatures remain token failures.
 
 ## Platform role
 
@@ -201,8 +215,9 @@ Subject derivation (`deriveCailSubject`) exists for the trusted authentication
 boundary only — the SSO gate and its verification tooling. Application code
 never derives subjects; it receives them inside verified tokens. The gate's
 Lua implementation (`gateway/lua/cail/identity.lua` in the cail-gateway repo)
-must stay in lockstep with this package; the vectors in `test/subject.test.ts`
-are the shared contract.
+must adopt the packaged v2 contract before deployment. It is deliberately not
+edited here. `contract/subject-derivation-v2.json` and its adjacent Lua
+reference provide the common vectors and framing implementation.
 
 This package does not provide sessions, CAIL API keys, model routing, quotas,
 or custom error handling.
@@ -214,6 +229,10 @@ Consumers used to invent structurally invalid subjects in tests
 enforcement arrived. Build fixtures from the blessed subpath instead:
 
 ```ts
+import {
+  loadIdentityVerifierConfig,
+  verifyIdentityJwt,
+} from "@cuny-ai-lab/cail-identity";
 import {
   TEST_SUBJECTS,
   canonicalTestSubject,
@@ -231,10 +250,13 @@ const jwt = await issuer.mintIdentityJwt({
   subject: owner,
   email: "owner@gc.cuny.edu",
 });
-const identity = await verifyIdentityJwt(jwt, issuer.jwks, {
+const loaded = await loadIdentityVerifierConfig({
+  jwks: issuer.jwksJson,
+  issuer: issuer.issuer,
   expectedAudience: "cail:agent-studio",
-  allowedIssuers: [issuer.issuer],
 });
+if (!loaded.ok) throw new Error(loaded.reason);
+const identity = await verifyIdentityJwt(jwt, loaded.config);
 ```
 
 `canonicalTestSubject(seed)` is `cail-` + the first 32 lowercase hex
@@ -286,11 +308,11 @@ bun install
 bun run check
 bun run check:package
 bun audit
-bun publish --dry-run
 ```
 
 Build output is committed and ships in the published package, so consumers
-install without a build step.
+install without a build step. `bun run check` includes the standalone LuaJIT
+derivation vectors. No package was published and production was not updated.
 
 ## License
 

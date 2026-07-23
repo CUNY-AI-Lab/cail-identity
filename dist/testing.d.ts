@@ -95,7 +95,7 @@ export interface MintTestIdentityJwtOptions {
 export interface TestIdentityIssuer {
     /** The key id present in both the JWKS and every minted token header. */
     kid: string;
-    /** The default `iss` of minted tokens — list it in `allowedIssuers`. */
+    /** The default `iss` of minted tokens — allow it when loading verifier config. */
     issuer: string;
     /** Public JWKS that verifies this kit's tokens (pass to `verifyIdentityJwt`). */
     jwks: JSONWebKeySet;

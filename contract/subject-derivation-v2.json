@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CAIL subject derivation v2 vectors",
+  "description": "Language-neutral UTF-8 byte-length framing vectors. The salts and identifiers are test-only.",
+  "version": 2,
+  "ownershipDomain": "cail-identity/ownership-subject:v2",
+  "operationalDomain": "cail-identity/operational-subject:v2",
+  "grammar": "<domain>:<issuer-utf8-byte-length>:<issuer><canonical-subject-utf8-byte-length>:<canonical-subject>",
+  "salt": "local-proof-subject-salt-do-not-use",
+  "vectors": [
+    {
+      "name": "cuny-login-realm",
+      "issuer": "http://identity:8090/cuny",
+      "oidcSubject": "  Bob@login.cuny.edu  ",
+      "canonicalSubject": "BOB",
+      "ownershipMaterial": "cail-identity/ownership-subject:v2:25:http://identity:8090/cuny3:BOB",
+      "operationalMaterial": "cail-identity/operational-subject:v2:25:http://identity:8090/cuny3:BOB",
+      "ownershipSubject": "cail-07c3e42149a128923ef778dcb680b733",
+      "operationalSubject": "cail-v1-b73b74356bebac3e2f4cccdb21ea038b"
+    },
+    {
+      "name": "opaque-subject",
+      "issuer": "http://identity:8090/cuny",
+      "oidcSubject": "opaque-123",
+      "canonicalSubject": "OPAQUE-123",
+      "ownershipMaterial": "cail-identity/ownership-subject:v2:25:http://identity:8090/cuny10:OPAQUE-123",
+      "operationalMaterial": "cail-identity/operational-subject:v2:25:http://identity:8090/cuny10:OPAQUE-123",
+      "ownershipSubject": "cail-297688e039aac4a1585872723d7599eb",
+      "operationalSubject": "cail-v1-849d9ce14960977123915e534328e081"
+    },
+    {
+      "name": "former-delimiter-collision-left",
+      "issuer": "https://issuer.example/a",
+      "oidcSubject": "b|c",
+      "canonicalSubject": "B|C",
+      "ownershipMaterial": "cail-identity/ownership-subject:v2:24:https://issuer.example/a3:B|C",
+      "operationalMaterial": "cail-identity/operational-subject:v2:24:https://issuer.example/a3:B|C",
+      "ownershipSubject": "cail-2d57651a7eb72ba9a047408ab4be8736",
+      "operationalSubject": "cail-v1-a6855a1ce7eba89c4b3c5e05ad28e7e1"
+    },
+    {
+      "name": "former-delimiter-collision-right",
+      "issuer": "https://issuer.example/a|B",
+      "oidcSubject": "c",
+      "canonicalSubject": "C",
+      "ownershipMaterial": "cail-identity/ownership-subject:v2:26:https://issuer.example/a|B1:C",
+      "operationalMaterial": "cail-identity/operational-subject:v2:26:https://issuer.example/a|B1:C",
+      "ownershipSubject": "cail-c2ed2996ea42a867fef66e58fec80bdb",
+      "operationalSubject": "cail-v1-20c34fc26b78720a3c86ac03c21b9d5f"
+    },
+    {
+      "name": "utf8-byte-lengths",
+      "issuer": "https://issuer.example/ü",
+      "oidcSubject": "straße",
+      "canonicalSubject": "STRAßE",
+      "ownershipMaterial": "cail-identity/ownership-subject:v2:25:https://issuer.example/ü7:STRAßE",
+      "operationalMaterial": "cail-identity/operational-subject:v2:25:https://issuer.example/ü7:STRAßE",
+      "ownershipSubject": "cail-6a2f1fef3e40b09c2c434caef201c67d",
+      "operationalSubject": "cail-v1-28f66f45f2796802808ae2bb8934f6eb"
+    }
+  ]
+}

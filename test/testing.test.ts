@@ -16,7 +16,9 @@ import {
   CAIL_SUBJECT_PATTERN,
   deriveCailSubject,
   isCailSubject,
+  loadIdentityVerifierConfig,
   verifyIdentityJwt,
+  type IdentityVerifierConfig,
 } from "../src/index.js";
 import {
   TEST_SUBJECTS,
@@ -27,6 +29,21 @@ import {
 
 function referenceSubject(seed: string): string {
   return `cail-${createHash("sha256").update(seed, "utf8").digest("hex").slice(0, 32)}`;
+}
+
+async function configFor(
+  issuer: TestIdentityIssuer,
+  expectedAudience: string,
+  now?: number,
+): Promise<IdentityVerifierConfig> {
+  const result = await loadIdentityVerifierConfig({
+    jwks: issuer.jwksJson,
+    issuer: issuer.issuer,
+    expectedAudience,
+    now,
+  });
+  if (!result.ok) throw new Error(`fixture config failed: ${result.reason}`);
+  return result.config;
 }
 
 describe("canonicalTestSubject", () => {
@@ -117,9 +134,11 @@ describe("TEST_SUBJECTS", () => {
 describe("createTestIdentityIssuer", () => {
   const AUD = "cail:testing-fixture";
   let issuer: TestIdentityIssuer;
+  let config: IdentityVerifierConfig;
 
   beforeAll(async () => {
     issuer = await createTestIdentityIssuer();
+    config = await configFor(issuer, AUD);
   });
 
   it("mints identity JWTs that verify through verifyIdentityJwt", async () => {
@@ -129,10 +148,7 @@ describe("createTestIdentityIssuer", () => {
       name: "Some One",
       entitlements: ["tools"],
     });
-    const identity = await verifyIdentityJwt(token, issuer.jwks, {
-      expectedAudience: AUD,
-      allowedIssuers: [issuer.issuer],
-    });
+    const identity = await verifyIdentityJwt(token, config);
     expect(identity).not.toBeNull();
     expect(identity?.subject).toBe(TEST_SUBJECTS.alice);
     expect(identity?.email).toBe("someone@gc.cuny.edu");
@@ -159,20 +175,14 @@ describe("createTestIdentityIssuer", () => {
       now,
       expiresInSeconds: 60,
     });
+    const activeConfig = await configFor(staging, AUD, now + 30);
     await expect(
-      verifyIdentityJwt(token, staging.jwks, {
-        expectedAudience: AUD,
-        allowedIssuers: [CAIL_STAGING_ISSUER],
-        now: now + 30,
-      }),
+      verifyIdentityJwt(token, activeConfig),
     ).resolves.toMatchObject({ subject: TEST_SUBJECTS.bob });
     // Expired by the verifier's clock → null.
+    const expiredConfig = await configFor(staging, AUD, now + 3600);
     await expect(
-      verifyIdentityJwt(token, staging.jwks, {
-        expectedAudience: AUD,
-        allowedIssuers: [CAIL_STAGING_ISSUER],
-        now: now + 3600,
-      }),
+      verifyIdentityJwt(token, expiredConfig),
     ).resolves.toBeNull();
   });
 
@@ -182,10 +192,7 @@ describe("createTestIdentityIssuer", () => {
       subject: "cail-abc123", // the exact drift class this export retires
     });
     await expect(
-      verifyIdentityJwt(token, issuer.jwks, {
-        expectedAudience: AUD,
-        allowedIssuers: [issuer.issuer],
-      }),
+      verifyIdentityJwt(token, config),
     ).resolves.toBeNull();
   });
 
@@ -193,10 +200,7 @@ describe("createTestIdentityIssuer", () => {
     const other = await createTestIdentityIssuer();
     const token = await other.mintIdentityJwt({ audience: AUD });
     await expect(
-      verifyIdentityJwt(token, issuer.jwks, {
-        expectedAudience: AUD,
-        allowedIssuers: [issuer.issuer],
-      }),
+      verifyIdentityJwt(token, config),
     ).resolves.toBeNull();
   });
 
@@ -226,46 +230,36 @@ describe("createTestIdentityIssuer", () => {
       authTime: now - 30,
     });
     expect(decodePayload(token).auth_time).toBe(now - 30);
+    const timedConfig = await configFor(issuer, AUD, now + 10);
     await expect(
-      verifyIdentityJwt(token, issuer.jwks, {
-        expectedAudience: AUD,
-        allowedIssuers: [issuer.issuer],
-        now: now + 10,
-      }),
+      verifyIdentityJwt(token, timedConfig),
     ).resolves.toMatchObject({ subject: TEST_SUBJECTS.alice });
   });
 
   it("mints nbf: past-nbf tokens verify, future-nbf tokens are rejected", async () => {
     const now = 2_000_000;
-    const opts = {
-      expectedAudience: AUD,
-      allowedIssuers: [issuer.issuer],
-      now,
-    };
+    const timedConfig = await configFor(issuer, AUD, now);
     const active = await issuer.mintIdentityJwt({
       audience: AUD,
       now,
       notBefore: now - 120,
     });
     expect(decodePayload(active).nbf).toBe(now - 120);
-    await expect(verifyIdentityJwt(active, issuer.jwks, opts)).resolves.not.toBeNull();
+    await expect(verifyIdentityJwt(active, timedConfig)).resolves.not.toBeNull();
 
     const notYetValid = await issuer.mintIdentityJwt({
       audience: AUD,
       now,
       notBefore: now + 3600,
     });
-    await expect(verifyIdentityJwt(notYetValid, issuer.jwks, opts)).resolves.toBeNull();
+    await expect(verifyIdentityJwt(notYetValid, timedConfig)).resolves.toBeNull();
   });
 
   it("mints array-valued aud (even one-element) that the verifier must reject", async () => {
     const token = await issuer.mintIdentityJwt({ audience: [AUD] });
     expect(decodePayload(token).aud).toEqual([AUD]);
     await expect(
-      verifyIdentityJwt(token, issuer.jwks, {
-        expectedAudience: AUD,
-        allowedIssuers: [issuer.issuer],
-      }),
+      verifyIdentityJwt(token, config),
     ).resolves.toBeNull();
   });
 
@@ -285,12 +279,9 @@ describe("createTestIdentityIssuer", () => {
     expect(payload.exp).toBe(now + 5);
     expect("iat" in payload).toBe(false);
     // Still a REAL RS256 token: verifies within its (overridden) lifetime...
+    const activeConfig = await configFor(issuer, AUD, now + 1);
     await expect(
-      verifyIdentityJwt(token, issuer.jwks, {
-        expectedAudience: AUD,
-        allowedIssuers: [issuer.issuer],
-        now: now + 1,
-      }),
+      verifyIdentityJwt(token, activeConfig),
     ).resolves.not.toBeNull();
     // ...and a token with `exp` omitted via claims is rejected (exp required).
     const noExp = await issuer.mintIdentityJwt({
@@ -299,12 +290,9 @@ describe("createTestIdentityIssuer", () => {
       claims: { exp: undefined },
     });
     expect("exp" in decodePayload(noExp)).toBe(false);
+    const expiredConfig = await configFor(issuer, AUD, now);
     await expect(
-      verifyIdentityJwt(noExp, issuer.jwks, {
-        expectedAudience: AUD,
-        allowedIssuers: [issuer.issuer],
-        now,
-      }),
+      verifyIdentityJwt(noExp, expiredConfig),
     ).resolves.toBeNull();
   });
 

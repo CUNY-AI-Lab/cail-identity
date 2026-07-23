@@ -1,88 +1,113 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { parseIdentityConfig, verifyIdentityJwt } from "../src/index.js";
+
+import {
+  CAIL_CANONICAL_ISSUER,
+  CAIL_STAGING_ISSUER,
+  loadIdentityVerifierConfig,
+  verifyIdentityJwt,
+  type IdentityVerifierConfig,
+  type LoadIdentityVerifierConfigInput,
+} from "../src/index.js";
 import { makeRsaFixture, mintRsaJwt, type RsaFixture } from "./fixtures.js";
 
 const NOW = 1_000_000;
-const ISS = "https://tools.ailab.gc.cuny.edu/cail-sso";
-const OTHER_ISS = "https://tools.cuny.qzz.io/cail-sso";
+const ISS = CAIL_CANONICAL_ISSUER;
+const OTHER_ISS = CAIL_STAGING_ISSUER;
 const AUD = "cail-internal";
 
 let key: RsaFixture;
+let otherKey: RsaFixture;
 
 beforeAll(async () => {
-  key = await makeRsaFixture("config-2026-07");
+  [key, otherKey] = await Promise.all([
+    makeRsaFixture("config-2026-07"),
+    makeRsaFixture("config-2026-08"),
+  ]);
 });
 
-describe("parseIdentityConfig happy path", () => {
-  it("returns the parsed JWKS and the exact issuer", () => {
-    const raw = JSON.stringify(key.jwks);
-    const result = parseIdentityConfig({ jwks: raw, issuer: ISS });
-    expect(result).toEqual({ ok: true, jwks: JSON.parse(raw), issuer: ISS });
+function input(
+  over: Partial<LoadIdentityVerifierConfigInput> = {},
+): LoadIdentityVerifierConfigInput {
+  return {
+    jwks: JSON.stringify(key.jwks),
+    issuer: ISS,
+    expectedAudience: AUD,
+    now: NOW,
+    ...over,
+  };
+}
+
+async function load(
+  over: Partial<LoadIdentityVerifierConfigInput> = {},
+) {
+  return loadIdentityVerifierConfig(input(over));
+}
+
+async function mustLoad(
+  over: Partial<LoadIdentityVerifierConfigInput> = {},
+): Promise<IdentityVerifierConfig> {
+  const result = await load(over);
+  if (!result.ok) throw new Error(`fixture config failed: ${result.reason}`);
+  return result.config;
+}
+
+describe("loadIdentityVerifierConfig happy path", () => {
+  it("returns a frozen full verifier snapshot", async () => {
+    const result = await load();
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.config).toMatchObject({
+      expectedAudience: AUD,
+      issuer: ISS,
+      clockToleranceSeconds: 60,
+      keyIds: [key.kid],
+    });
+    expect(Object.isFrozen(result.config)).toBe(true);
+    expect(Object.isFrozen(result.config.keyIds)).toBe(true);
   });
 
-  it("accepts an issuer that is a member of supportedIssuers", () => {
-    const result = parseIdentityConfig({
-      jwks: JSON.stringify(key.jwks),
+  it("accepts both keys during a distinct-kid rotation overlap", async () => {
+    const config = await mustLoad({
+      jwks: JSON.stringify({
+        keys: [key.publicJwk, otherKey.publicJwk],
+      }),
+    });
+    expect(config.keyIds).toEqual([key.kid, otherKey.kid]);
+
+    for (const fixture of [key, otherKey]) {
+      const token = await mintRsaJwt(
+        {
+          sub: "cail-0123456789abcdef0123456789abcdef",
+          aud: AUD,
+          iss: ISS,
+          exp: NOW + 3600,
+        },
+        fixture,
+      );
+      await expect(verifyIdentityJwt(token, config)).resolves.not.toBeNull();
+    }
+  });
+
+  it("loads staging only when it belongs to the configured authority", async () => {
+    const result = await load({
       issuer: OTHER_ISS,
       supportedIssuers: [ISS, OTHER_ISS],
     });
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.issuer).toBe(OTHER_ISS);
-  });
-
-  it("accepts an empty keys array — a loaded config; key selection is token validation", () => {
-    const result = parseIdentityConfig({
-      jwks: JSON.stringify({ keys: [] }),
-      issuer: ISS,
-    });
-    expect(result.ok).toBe(true);
-  });
-
-  it("output feeds verifyIdentityJwt end-to-end", async () => {
-    const parsed = parseIdentityConfig({
-      jwks: JSON.stringify(key.jwks),
-      issuer: ISS,
-    });
-    expect(parsed.ok).toBe(true);
-    if (!parsed.ok) return;
-    const token = await mintRsaJwt(
-      {
-        sub: "cail-0123456789abcdef0123456789abcdef",
-        aud: AUD,
-        iss: parsed.issuer,
-        exp: NOW + 3600,
-      },
-      key,
-    );
-    const identity = await verifyIdentityJwt(token, parsed.jwks, {
-      expectedAudience: AUD,
-      allowedIssuers: [parsed.issuer],
-      now: NOW,
-    });
-    expect(identity?.subject).toBe("cail-0123456789abcdef0123456789abcdef");
+    if (result.ok) expect(result.config.issuer).toBe(OTHER_ISS);
   });
 });
 
-describe("parseIdentityConfig jwks_missing", () => {
-  it.each([undefined, "", "   ", "\n\t"])(
-    "flags unset or blank JWKS (%j)",
-    (raw) => {
-      expect(parseIdentityConfig({ jwks: raw as string | undefined, issuer: ISS }))
-        .toEqual({ ok: false, reason: "jwks_missing" });
+describe("loadIdentityVerifierConfig JWKS errors", () => {
+  it.each([undefined, "", "   ", "\n\t", 42])(
+    "flags unset, blank, or non-string JWKS (%j)",
+    async (jwks) => {
+      await expect(
+        load({ jwks: jwks as string | undefined }),
+      ).resolves.toEqual({ ok: false, reason: "jwks_missing" });
     },
   );
 
-  it("flags a non-string JWKS value fed through an untyped env", () => {
-    expect(
-      parseIdentityConfig({
-        jwks: 42 as unknown as string,
-        issuer: ISS,
-      }),
-    ).toEqual({ ok: false, reason: "jwks_missing" });
-  });
-});
-
-describe("parseIdentityConfig jwks_malformed", () => {
   it.each([
     ["truncated JSON", '{"keys": ['],
     ["non-JSON text", "not json at all"],
@@ -91,140 +116,257 @@ describe("parseIdentityConfig jwks_malformed", () => {
     ["JSON array", "[]"],
     ["object without keys", "{}"],
     ["keys not an array", '{"keys": {}}'],
-    ["keys with a non-object element", '{"keys": [null]}'],
-    ["keys with a string element", '{"keys": ["k"]}'],
-  ])("flags %s", (_name, raw) => {
-    expect(parseIdentityConfig({ jwks: raw, issuer: ISS })).toEqual({
+    ["empty keys", '{"keys": []}'],
+    ["empty key", '{"keys": [{}]}'],
+    ["non-object key", '{"keys": [null]}'],
+  ])("flags %s", async (_name, jwks) => {
+    await expect(load({ jwks })).resolves.toEqual({
       ok: false,
       reason: "jwks_malformed",
     });
   });
 
-  it("never throws on malformed input", () => {
-    expect(() =>
-      parseIdentityConfig({
-        jwks: `${String.fromCharCode(0)}{`,
-        issuer: ISS,
-      }),
-    ).not.toThrow();
+  it("requires a nonempty distinct kid on every eligible public RS256 key", async () => {
+    for (const jwks of [
+      { keys: [{ ...key.publicJwk, kid: undefined }] },
+      { keys: [{ ...key.publicJwk, kid: "" }] },
+      { keys: [key.publicJwk, { ...key.publicJwk }] },
+    ]) {
+      await expect(load({ jwks: JSON.stringify(jwks) })).resolves.toEqual({
+        ok: false,
+        reason: "jwks_malformed",
+      });
+    }
   });
 
-  it("rejects JWK Sets that contain private key material", () => {
-    expect(
-      parseIdentityConfig({
-        jwks: JSON.stringify({
-          keys: [{ ...key.publicJwk, k: "c2VjcmV0LWtleQ" }],
-        }),
-        issuer: ISS,
-      }),
-    ).toEqual({ ok: false, reason: "jwks_malformed" });
+  it("rejects every structurally ineligible or private JWK", async () => {
+    const invalidKeys = [
+      { ...key.publicJwk, kty: "EC" },
+      { ...key.publicJwk, alg: "RS512" },
+      { ...key.publicJwk, use: "enc" },
+      { ...key.publicJwk, key_ops: ["sign"] },
+      { ...key.publicJwk, key_ops: ["verify", "verify"] },
+      { ...key.publicJwk, n: "" },
+      { ...key.publicJwk, e: "AB" },
+      { ...key.publicJwk, d: "private-material" },
+      { ...key.publicJwk, k: "c2VjcmV0LWtleQ" },
+      { ...key.publicJwk, oth: [] },
+    ];
+    for (const invalidKey of invalidKeys) {
+      await expect(
+        load({ jwks: JSON.stringify({ keys: [invalidKey] }) }),
+      ).resolves.toEqual({ ok: false, reason: "jwks_malformed" });
+    }
+  });
+
+  it("requires canonical minimal Base64urlUInt n and e", async () => {
+    const withLeadingZero = (value: string): string => {
+      const bytes = Buffer.from(value.replaceAll("-", "+").replaceAll("_", "/"), "base64");
+      return Buffer.from([0, ...bytes])
+        .toString("base64url");
+    };
+    for (const invalidKey of [
+      { ...key.publicJwk, n: withLeadingZero(key.publicJwk.n!) },
+      { ...key.publicJwk, e: withLeadingZero(key.publicJwk.e!) },
+    ]) {
+      await expect(
+        load({ jwks: JSON.stringify({ keys: [invalidKey] }) }),
+      ).resolves.toEqual({ ok: false, reason: "jwks_malformed" });
+    }
+  });
+
+  it("uses parsed own-data JSON and never honors inherited key metadata", async () => {
+    const inherited = Object.create(key.publicJwk) as Record<string, unknown>;
+    inherited.kid = key.kid;
+    await expect(
+      load({ jwks: JSON.stringify({ keys: [inherited] }) }),
+    ).resolves.toEqual({ ok: false, reason: "jwks_malformed" });
+
+    const json = JSON.stringify({
+      keys: [{ ...key.publicJwk, __proto__: { d: "private" } }],
+    });
+    const result = await load({ jwks: json });
+    expect(result.ok).toBe(true);
+    expect(({} as { d?: string }).d).toBeUndefined();
   });
 });
 
-describe("parseIdentityConfig issuer errors", () => {
-  it.each([undefined, "", "   ", "\n\t"])(
-    "flags a missing issuer (%j)",
-    (issuer) => {
-      expect(
-        parseIdentityConfig({ jwks: JSON.stringify(key.jwks), issuer }),
-      ).toEqual({ ok: false, reason: "issuer_missing" });
-    },
-  );
+describe("loadIdentityVerifierConfig issuer authority", () => {
+  it.each([undefined, "", 7])("flags missing issuer %j", async (issuer) => {
+    await expect(
+      load({ issuer: issuer as string | undefined }),
+    ).resolves.toEqual({ ok: false, reason: "issuer_missing" });
+  });
 
   it.each([
     ` ${ISS}`,
     `${ISS} `,
     `${ISS}\u0000`,
-    "https://tools.ailab.gc. cuny.edu/cail-sso",
-  ])(
-    "flags a non-canonical issuer (%j)",
-    (issuer) => {
-      expect(
-        parseIdentityConfig({ jwks: JSON.stringify(key.jwks), issuer }),
-      ).toEqual({ ok: false, reason: "issuer_unsupported" });
-    },
-  );
-
-  it("flags a non-string issuer", () => {
-    expect(
-      parseIdentityConfig({
-        jwks: JSON.stringify(key.jwks),
-        issuer: 7 as unknown as string,
-      }),
-    ).toEqual({ ok: false, reason: "issuer_missing" });
-  });
-
-  it.each([
-    [ISS, ISS],
-    [ISS, ""],
-    [ISS, 7],
-  ])("flags a malformed supportedIssuers allowlist (%j)", (...issuers) => {
-    expect(
-      parseIdentityConfig({
-        jwks: JSON.stringify(key.jwks),
-        issuer: ISS,
-        supportedIssuers: issuers as unknown as string[],
-      }),
-    ).toEqual({ ok: false, reason: "issuer_unsupported" });
-  });
-
-  it("flags an issuer outside supportedIssuers", () => {
-    expect(
-      parseIdentityConfig({
-        jwks: JSON.stringify(key.jwks),
-        issuer: "https://evil.example/cail-sso",
-        supportedIssuers: [ISS, OTHER_ISS],
-      }),
-    ).toEqual({ ok: false, reason: "issuer_unsupported" });
-  });
-
-  it("flags an empty supportedIssuers allowlist", () => {
-    expect(
-      parseIdentityConfig({
-        jwks: JSON.stringify(key.jwks),
-        issuer: ISS,
-        supportedIssuers: [],
-      }),
-    ).toEqual({ ok: false, reason: "issuer_unsupported" });
-  });
-
-  it("requires an exact issuer match — no trimming or case folding", () => {
-    expect(
-      parseIdentityConfig({
-        jwks: JSON.stringify(key.jwks),
-        issuer: ` ${ISS}`,
-        supportedIssuers: [ISS],
-      }),
-    ).toEqual({ ok: false, reason: "issuer_unsupported" });
-  });
-
-  it("reports the JWKS problem before the issuer problem", () => {
-    expect(parseIdentityConfig({ jwks: undefined, issuer: undefined })).toEqual({
+    `${ISS}?query=1`,
+    `${ISS}#fragment`,
+    "http://tools.ailab.gc.cuny.edu/cail-sso",
+    "https://TOOLS.AILAB.GC.CUNY.EDU/cail-sso",
+    "https://user@tools.ailab.gc.cuny.edu/cail-sso",
+  ])("rejects noncanonical issuer %j", async (issuer) => {
+    await expect(load({ issuer })).resolves.toEqual({
       ok: false,
-      reason: "jwks_missing",
+      reason: "issuer_unsupported",
     });
   });
 
-  it("never throws when runtime objects have hostile accessors", () => {
+  it("rejects an issuer outside the default or supplied authority", async () => {
+    const outside = "https://evil.example/cail-sso";
+    await expect(load({ issuer: outside })).resolves.toEqual({
+      ok: false,
+      reason: "issuer_unsupported",
+    });
+    await expect(
+      load({ issuer: outside, supportedIssuers: [ISS, OTHER_ISS] }),
+    ).resolves.toEqual({ ok: false, reason: "issuer_unsupported" });
+  });
+
+  it.each([
+    [[]],
+    [[ISS, ISS]],
+    [[ISS, ""]],
+    [[ISS, 7]],
+    [[`${ISS}/`]],
+  ])("rejects malformed supported issuer authority %#", async (values) => {
+    await expect(
+      load({ supportedIssuers: values as unknown as string[] }),
+    ).resolves.toEqual({ ok: false, reason: "issuer_unsupported" });
+  });
+});
+
+describe("loadIdentityVerifierConfig audience and timing", () => {
+  it.each([undefined, ""])("flags missing audience %j", async (expectedAudience) => {
+    await expect(load({ expectedAudience })).resolves.toEqual({
+      ok: false,
+      reason: "audience_missing",
+    });
+  });
+
+  it.each([["cail:x"], 7, "cail:\u0000x"])(
+    "rejects nonscalar or malformed audience %j",
+    async (expectedAudience) => {
+      await expect(
+        load({ expectedAudience: expectedAudience as unknown as string }),
+      ).resolves.toEqual({ ok: false, reason: "audience_malformed" });
+    },
+  );
+
+  it.each([
+    { now: Number.NaN },
+    { now: Number.POSITIVE_INFINITY },
+    { now: 8_640_000_000_001 },
+    { clockToleranceSeconds: -1 },
+    { clockToleranceSeconds: Number.NaN },
+    { clockToleranceSeconds: Number.POSITIVE_INFINITY },
+    { clockToleranceSeconds: 301 },
+  ])("rejects invalid bounded timing %#", async (timing) => {
+    await expect(load(timing)).resolves.toEqual({
+      ok: false,
+      reason: "timing_invalid",
+    });
+  });
+
+  it("accepts strict zero tolerance and the maximum finite Date bound", async () => {
+    const result = await load({
+      now: 8_640_000_000_000,
+      clockToleranceSeconds: 0,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.config.clockToleranceSeconds).toBe(0);
+  });
+});
+
+describe("immutable snapshots and hostile accessors", () => {
+  it("reads every top-level option exactly once and uses those exact values", async () => {
+    const counts = new Map<string, number>();
+    const valid: Record<string, unknown> = {
+      jwks: JSON.stringify(key.jwks),
+      issuer: ISS,
+      expectedAudience: AUD,
+      supportedIssuers: [ISS],
+      now: NOW,
+      clockToleranceSeconds: 0,
+    };
+    const later: Record<string, unknown> = {
+      jwks: '{"keys":[]}',
+      issuer: "https://evil.example/",
+      expectedAudience: ["wrong"],
+      supportedIssuers: [],
+      now: Number.NaN,
+      clockToleranceSeconds: 301,
+    };
+    const hostile = Object.create(null) as Record<string, unknown>;
+    for (const name of Object.keys(valid)) {
+      Object.defineProperty(hostile, name, {
+        enumerable: true,
+        get() {
+          const count = (counts.get(name) ?? 0) + 1;
+          counts.set(name, count);
+          return count === 1 ? valid[name] : later[name];
+        },
+      });
+    }
+
+    const result = await loadIdentityVerifierConfig(
+      hostile as unknown as LoadIdentityVerifierConfigInput,
+    );
+    expect(result.ok).toBe(true);
+    expect(Object.fromEntries(counts)).toEqual({
+      jwks: 1,
+      issuer: 1,
+      expectedAudience: 1,
+      supportedIssuers: 1,
+      now: 1,
+      clockToleranceSeconds: 1,
+    });
+  });
+
+  it("snapshots each supported-issuer element once", async () => {
+    let reads = 0;
+    const issuers = [ISS];
+    Object.defineProperty(issuers, 0, {
+      configurable: true,
+      enumerable: true,
+      get() {
+        reads += 1;
+        return reads === 1 ? ISS : "https://evil.example/";
+      },
+    });
+    const result = await load({ supportedIssuers: issuers });
+    expect(result.ok).toBe(true);
+    expect(reads).toBe(1);
+  });
+
+  it("returns an owned config error instead of throwing on hostile proxies", async () => {
     const throwing = () => {
       throw new Error("hostile config input");
     };
     const hostileInput = new Proxy({}, { getOwnPropertyDescriptor: throwing });
-    expect(() =>
-      parseIdentityConfig(hostileInput as never),
-    ).not.toThrow();
-    expect(parseIdentityConfig(hostileInput as never)).toEqual({
-      ok: false,
-      reason: "jwks_missing",
-    });
+    await expect(
+      loadIdentityVerifierConfig(hostileInput as never),
+    ).resolves.toEqual({ ok: false, reason: "jwks_missing" });
 
     const hostileAllowlist = new Proxy([ISS], { get: throwing });
-    expect(
-      parseIdentityConfig({
-        jwks: JSON.stringify(key.jwks),
-        issuer: ISS,
-        supportedIssuers: hostileAllowlist,
-      }),
-    ).toEqual({ ok: false, reason: "issuer_unsupported" });
+    await expect(
+      load({ supportedIssuers: hostileAllowlist }),
+    ).resolves.toEqual({ ok: false, reason: "issuer_unsupported" });
+  });
+
+  it("rejects forged verifier objects as configuration misuse, not token failure", async () => {
+    await expect(
+      verifyIdentityJwt(
+        "a.b.c",
+        {
+          expectedAudience: AUD,
+          issuer: ISS,
+          clockToleranceSeconds: 60,
+          keyIds: [key.kid],
+        } as unknown as IdentityVerifierConfig,
+      ),
+    ).rejects.toThrow("snapshot returned by loadIdentityVerifierConfig");
   });
 });

@@ -1,6 +1,10 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { SignJWT, base64url, type JSONWebKeySet } from "jose";
-import { verifyIdentityJwt } from "../src/index.js";
+import { SignJWT, base64url } from "jose";
+import {
+  loadIdentityVerifierConfig,
+  verifyIdentityJwt,
+  type LoadIdentityVerifierConfigInput,
+} from "../src/index.js";
 import {
   encodeJson,
   makeRsaFixture,
@@ -40,11 +44,40 @@ async function verify(
   jwks: unknown = oldKey.jwks,
   opts: unknown = OPTS,
 ) {
-  return verifyIdentityJwt(
-    token,
-    jwks as JSONWebKeySet,
-    opts as typeof OPTS,
-  );
+  const values = opts as Partial<typeof OPTS> & {
+    allowedIssuers?: unknown;
+    expectedAudience?: unknown;
+    now?: unknown;
+    clockToleranceSeconds?: unknown;
+  };
+  const allowedIssuers = values.allowedIssuers;
+  const issuer =
+    Array.isArray(allowedIssuers) && typeof allowedIssuers[0] === "string"
+      ? allowedIssuers[0]
+      : undefined;
+  const loaded = await loadIdentityVerifierConfig({
+    jwks: JSON.stringify(jwks),
+    issuer,
+    expectedAudience: values.expectedAudience,
+    supportedIssuers: allowedIssuers,
+    now: values.now,
+    clockToleranceSeconds: values.clockToleranceSeconds,
+  } as LoadIdentityVerifierConfigInput);
+  if (!loaded.ok) throw new Error(`invalid test config: ${loaded.reason}`);
+  return verifyIdentityJwt(token, loaded.config);
+}
+
+async function expectConfigError(
+  jwks: unknown,
+  reason = "jwks_malformed",
+) {
+  const result = await loadIdentityVerifierConfig({
+    jwks: JSON.stringify(jwks),
+    issuer: ISS,
+    expectedAudience: AUD,
+    now: NOW,
+  });
+  expect(result).toEqual({ ok: false, reason });
 }
 
 describe("verifyIdentityJwt happy path and output", () => {
@@ -149,12 +182,10 @@ describe("verifyIdentityJwt algorithm and key selection", () => {
 
   it("rejects duplicate eligible RSA signing keys for one kid", async () => {
     const duplicate = { ...oldKey.publicJwk };
-    const token = await mintRsaJwt(claims(), oldKey);
-    expect(await verify(token, { keys: [oldKey.publicJwk, duplicate] })).toBeNull();
+    await expectConfigError({ keys: [oldKey.publicJwk, duplicate] });
   });
 
-  it("rejects wrong, private, malformed, or non-verification matching JWKs", async () => {
-    const token = await mintRsaJwt(claims(), oldKey);
+  it("owns wrong, private, malformed, or non-verification JWKs as config errors", async () => {
     const invalidKeys = [
       { ...oldKey.publicJwk, kty: "EC" },
       { ...oldKey.publicJwk, alg: "RS512" },
@@ -167,12 +198,11 @@ describe("verifyIdentityJwt algorithm and key selection", () => {
       { ...oldKey.publicJwk, oth: [] },
     ];
     for (const key of invalidKeys) {
-      expect(await verify(token, { keys: [key] })).toBeNull();
+      await expectConfigError({ keys: [key] });
     }
   });
 
-  it("rejects non-minimal Base64urlUInt encodings for RSA n and e", async () => {
-    const token = await mintRsaJwt(claims(), oldKey);
+  it("owns non-minimal Base64urlUInt encodings as config errors", async () => {
     const withLeadingZero = (value: string): string =>
       base64url.encode(Uint8Array.from([0, ...base64url.decode(value)]));
 
@@ -180,31 +210,27 @@ describe("verifyIdentityJwt algorithm and key selection", () => {
       { ...oldKey.publicJwk, n: withLeadingZero(oldKey.publicJwk.n!) },
       { ...oldKey.publicJwk, e: withLeadingZero(oldKey.publicJwk.e!) },
     ]) {
-      expect(await verify(token, { keys: [key] })).toBeNull();
+      await expectConfigError({ keys: [key] });
     }
   });
 
-  it("rejects private material anywhere in the supplied JWKS", async () => {
-    const token = await mintRsaJwt(claims(), oldKey);
+  it("owns private material anywhere in the supplied JWKS as config error", async () => {
     const unrelatedSecret = {
       kty: "oct",
       kid: "must-not-be-in-a-public-jwks",
       k: "c2VjcmV0LWtleQ",
     };
-    expect(
-      await verify(token, {
-        keys: [oldKey.publicJwk, unrelatedSecret],
-      }),
-    ).toBeNull();
+    await expectConfigError({
+      keys: [oldKey.publicJwk, unrelatedSecret],
+    });
   });
 
-  it("rejects malformed JWKS containers and inherited keys", async () => {
-    const token = await mintRsaJwt(claims(), oldKey);
+  it("owns malformed JWKS containers and inherited keys as config errors", async () => {
     for (const jwks of [null, {}, { keys: null }, { keys: [null] }]) {
-      expect(await verify(token, jwks)).toBeNull();
+      await expectConfigError(jwks);
     }
     const inherited = Object.create({ keys: [oldKey.publicJwk] });
-    expect(await verify(token, inherited)).toBeNull();
+    await expectConfigError(inherited);
   });
 
   it("rejects alg confusion even when an HS256 signature is valid", async () => {
@@ -282,11 +308,11 @@ describe("verifyIdentityJwt audience, issuer, and subject", () => {
     expect(await verify(await mintRsaJwt(claims({ iss }), oldKey))).toBeNull();
   });
 
-  it("rejects multiple configured issuers even when the token matches one", async () => {
+  it("snapshots one exact issuer even when the authority supports prod and staging", async () => {
     const opts = { ...OPTS, allowedIssuers: [ISS, OTHER_ISS] };
     expect(
       await verify(await mintRsaJwt(claims(), oldKey), oldKey.jwks, opts),
-    ).toBeNull();
+    ).not.toBeNull();
   });
 
   it.each([
@@ -318,21 +344,6 @@ describe("verifyIdentityJwt time and options", () => {
     expect(await verify(await mintRsaJwt(claims({ nbf: NOW }), oldKey), oldKey.jwks, strict)).not.toBeNull();
   });
 
-  it.each([
-    {},
-    { ...OPTS, expectedAudience: "" },
-    { ...OPTS, allowedIssuers: [] },
-    { ...OPTS, allowedIssuers: [ISS, ISS] },
-    { ...OPTS, allowedIssuers: [ISS, ""] },
-    { ...OPTS, now: Number.NaN },
-    { ...OPTS, now: Number.POSITIVE_INFINITY },
-    { ...OPTS, clockToleranceSeconds: -1 },
-    { ...OPTS, clockToleranceSeconds: Number.NaN },
-    { ...OPTS, clockToleranceSeconds: 301 },
-  ])("fails closed for invalid options %#", async (opts) => {
-    expect(await verify(await mintRsaJwt(claims(), oldKey), oldKey.jwks, opts)).toBeNull();
-  });
-
   it.each([undefined, "9999999", Number.NaN, Number.POSITIVE_INFINITY])(
     "rejects invalid exp %j",
     async (exp) => {
@@ -352,34 +363,14 @@ describe("verifyIdentityJwt time and options", () => {
 });
 
 describe("verifyIdentityJwt own-property and fail-closed behavior", () => {
-  it("does not source required claims or key metadata from prototypes", async () => {
-    const token = await mintRsaJwt(claims(), oldKey);
+  it("does not source key metadata from prototypes during config loading", async () => {
     const inheritedKid = Object.create(oldKey.publicJwk) as Record<string, unknown>;
     delete inheritedKid.kid;
-    expect(await verify(token, { keys: [inheritedKid] })).toBeNull();
+    await expectConfigError({ keys: [inheritedKid] });
   });
 
-  it("returns null rather than throwing for wrong runtime input types", async () => {
+  it("returns null rather than throwing for a wrong token runtime type", async () => {
     await expect(verify(null as unknown as string)).resolves.toBeNull();
-    await expect(verify("a.b.c", oldKey.jwks, null)).resolves.toBeNull();
-  });
-
-  it("returns null for hostile getters, proxies, and poisoned array methods", async () => {
-    const token = await mintRsaJwt(claims(), oldKey);
-    const throwing = () => {
-      throw new Error("hostile input");
-    };
-    const hostileJwks = Object.defineProperty({}, "keys", { get: throwing });
-    const hostileOpts = new Proxy(OPTS, { getOwnPropertyDescriptor: throwing });
-    const poisonedIssuers = [ISS];
-    (poisonedIssuers as unknown as Record<string, unknown>).every =
-      "not a function";
-
-    await expect(verify(token, hostileJwks)).resolves.toBeNull();
-    await expect(verify(token, oldKey.jwks, hostileOpts)).resolves.toBeNull();
-    await expect(
-      verify(token, oldKey.jwks, { ...OPTS, allowedIssuers: poisonedIssuers }),
-    ).resolves.toBeNull();
   });
 
   it("does not mutate the token, JWKS, options, or claims", async () => {
