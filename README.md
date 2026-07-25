@@ -30,7 +30,7 @@ Configure authentication outside the repository, for example in the user's
 ```
 
 These are registry configuration files that Bun reads; no npm CLI is required.
-Pin an exact release, for example `"@cuny-ai-lab/cail-identity": "5.0.0"`, then
+Pin an exact release, for example `"@cuny-ai-lab/cail-identity": "5.0.1"`, then
 run `bun install` with `NODE_AUTH_TOKEN` set to a
 [classic GitHub PAT](https://docs.github.com/en/packages/learn-github-packages/introduction-to-github-packages#authenticating-to-github-packages)
 that has `read:packages`. CI may supply the same environment variable from a
@@ -317,8 +317,12 @@ bun audit
 Build output is committed and ships in the published package, so consumers
 install without a build step. `bun run check` includes the standalone LuaJIT
 derivation vectors and verifies committed output without Git history. Version
-5.0.0 is published to GitHub Packages; package publication does not update a
-production deployment.
+5.0.0 is published to GitHub Packages. This source is the 5.0.1 successor;
+5.0.1 is not claimed published until the registry contains it. The checked-in
+release authority records the existing 5.0.0 package-version identity and the
+dated observation that 5.0.1 was absent. The publish workflow repeats that
+read-only registry query immediately before publishing. Package publication
+does not update a production deployment.
 
 ## License
 

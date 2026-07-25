@@ -1,6 +1,6 @@
 {
   "name": "@cuny-ai-lab/cail-identity",
-  "version": "5.0.0",
+  "version": "5.0.1",
   "description": "CAIL stable pseudonymous subject derivation and RS256/JWKS identity-JWT verification.",
   "type": "module",
   "license": "MIT",
@@ -33,14 +33,17 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "check": "bun run typecheck && bun run test && bun run test:lua && bun run check:dist",
+    "check": "bun run typecheck && bun run test && bun run test:lua && bun run check:dist && bun run check:package && bun run check:release-authority",
+    "check:clean": "bun scripts/check-clean.ts",
     "check:dist": "bun scripts/check-dist.ts",
-    "check:package": "bun pm pack --dry-run",
+    "check:package": "bun pm pack --dry-run --ignore-scripts",
+    "check:release-authority": "bun scripts/check-release-authority.ts",
+    "check:release-live": "bun scripts/check-release-authority.ts --live",
     "typecheck": "tsc -p tsconfig.build.json --noEmit && tsc -p tsconfig.test.json",
     "test": "vitest run",
     "test:lua": "luajit test/subject-derivation-v2.lua",
     "test:watch": "vitest",
-    "prepublishOnly": "bun run check",
+    "prepublishOnly": "bun run check && bun run check:clean && bun run check:release-live",
     "prepare": "bun run build"
   },
   "dependencies": {

@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "package": {
+    "name": "@cuny-ai-lab/cail-identity",
+    "candidate_version": "5.0.1"
+  },
+  "behavior_authority": {
+    "commit": "f1c4dea47c3e67af07cf2a8d0f65bc9d81c315b2",
+    "tree": "84770f80d24cf1e6928aec0da833be34d31a7eb6",
+    "runtime_paths": [
+      "contract",
+      "src"
+    ],
+    "runtime_sha256": "37a34bf368b87a13680b6294f64be5b303ac1c6e9d4d58505cf9591531f3dbe3"
+  },
+  "registry": {
+    "url": "https://npm.pkg.github.com",
+    "api": "https://api.github.com/orgs/CUNY-AI-Lab/packages/npm/cail-identity/versions",
+    "observed_at": "2026-07-25T21:36:35Z",
+    "published_versions": [
+      {
+        "version": "5.0.0",
+        "package_version_id": 1066308573,
+        "published_at": "2026-07-25T17:27:05Z"
+      },
+      {
+        "version": "4.4.0",
+        "package_version_id": 1046174164,
+        "published_at": "2026-07-19T23:30:37Z"
+      },
+      {
+        "version": "4.3.0",
+        "package_version_id": 1046156313,
+        "published_at": "2026-07-19T23:09:25Z"
+      },
+      {
+        "version": "4.2.0",
+        "package_version_id": 1046114943,
+        "published_at": "2026-07-19T22:33:36Z"
+      },
+      {
+        "version": "4.1.0",
+        "package_version_id": 1046058154,
+        "published_at": "2026-07-19T21:51:19Z"
+      },
+      {
+        "version": "4.0.0",
+        "package_version_id": 1045860997,
+        "published_at": "2026-07-19T19:27:43Z"
+      }
+    ],
+    "candidate_state": "not_published"
+  }
+}
