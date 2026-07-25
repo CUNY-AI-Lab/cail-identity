@@ -38,8 +38,8 @@ jobs:
       # again if it is still unpatched.
       # GHSA-r28c-9q8g-f849 — postcss: path traversal via sourceMappingURL; no patched release
       - name: Audit dependencies
-        run: bun audit \
-          --ignore=GHSA-r28c-9q8g-f849
+        run: |
+          bun audit --ignore=GHSA-r28c-9q8g-f849
 
       - name: Typecheck, test, and verify committed output
         run: bun run check
