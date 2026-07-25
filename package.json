@@ -34,7 +34,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "check": "bun run typecheck && bun run test && bun run test:lua && bun run check:dist",
-    "check:dist": "bun run build && git diff --exit-code -- dist",
+    "check:dist": "bun scripts/check-dist.ts",
     "check:package": "bun pm pack --dry-run",
     "typecheck": "tsc -p tsconfig.build.json --noEmit && tsc -p tsconfig.test.json",
     "test": "vitest run",

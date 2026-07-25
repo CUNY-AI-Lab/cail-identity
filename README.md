@@ -316,7 +316,9 @@ bun audit
 
 Build output is committed and ships in the published package, so consumers
 install without a build step. `bun run check` includes the standalone LuaJIT
-derivation vectors. No package was published and production was not updated.
+derivation vectors and verifies committed output without Git history. Version
+5.0.0 is published to GitHub Packages; package publication does not update a
+production deployment.
 
 ## License
 
