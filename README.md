@@ -35,7 +35,7 @@ run `bun install` with `NODE_AUTH_TOKEN` set to a
 [classic GitHub PAT](https://docs.github.com/en/packages/learn-github-packages/introduction-to-github-packages#authenticating-to-github-packages)
 that has `read:packages`. CI may supply the same environment variable from a
 secret. Maintainers keep the same registry and authentication configuration
-outside the repository, set `NODE_AUTH_TOKEN` to a classic PAT with
+outside the repository, set `NPM_CONFIG_TOKEN` to a classic PAT with
 `write:packages`, verify with `bun publish --dry-run`, and release with
 `bun publish`. GitHub Actions may instead use its repository `GITHUB_TOKEN`
 with `packages: write`.

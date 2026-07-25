@@ -24,7 +24,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install --yes luajit
 
       - name: Install
-        run: bun install --frozen-lockfile
+        run: bun install --frozen-lockfile --ignore-scripts
 
       # Dev-toolchain advisories with no shipping impact and, for PostCSS, no
       # patched release yet — 8.5.23 still carries GHSA-r28c-9q8g-f849. Every one

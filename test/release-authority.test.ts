@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -26,6 +27,10 @@ const publishWorkflow = readFileSync(
   resolve(import.meta.dirname, "../.github/workflows/publish.yml"),
   "utf8",
 );
+const ciWorkflow = readFileSync(
+  resolve(import.meta.dirname, "../.github/workflows/ci.yml"),
+  "utf8",
+);
 
 describe("release version authority", () => {
   it("records the occupied release and preserves behavior bytes", () => {
@@ -49,6 +54,39 @@ describe("release version authority", () => {
     expect(publishWorkflow).toContain(
       'CAIL_REGISTRY_VERSIONS_FILE="$RUNNER_TEMP/cail-identity-package-versions.json"',
     );
+    expect(ciWorkflow).toContain(
+      "bun install --frozen-lockfile --ignore-scripts",
+    );
+    expect(publishWorkflow).toContain(
+      "NPM_CONFIG_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+    );
+    expect(publishWorkflow).not.toContain("NODE_AUTH_TOKEN");
+    expect(publishWorkflow).not.toContain("NPM_CONFIG_USERCONFIG");
+    expect(publishWorkflow).not.toMatch(/>\s*\.npmrc/);
+  });
+
+  it("uses Bun's token authority without writing checkout credentials", () => {
+    const npmrc = resolve(import.meta.dirname, "../.npmrc");
+    expect(existsSync(npmrc)).toBe(false);
+    const result = spawnSync(
+      "bun",
+      ["publish", "--dry-run", "--ignore-scripts"],
+      {
+        cwd: resolve(import.meta.dirname, ".."),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          NPM_CONFIG_TOKEN: "workflow-dry-run-placeholder",
+        },
+        timeout: 120_000,
+      },
+    );
+    const output = (result.stdout ?? "") + (result.stderr ?? "");
+    expect(result.status).toBe(0);
+    expect(output).toContain(
+      "+ @cuny-ai-lab/cail-identity@5.0.1 (dry-run)",
+    );
+    expect(existsSync(npmrc)).toBe(false);
   });
 
   it("rejects forged local authority", () => {
