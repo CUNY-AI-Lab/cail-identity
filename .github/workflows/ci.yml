@@ -26,8 +26,20 @@ jobs:
       - name: Install
         run: bun install --frozen-lockfile
 
+      # Dev-toolchain advisories with no shipping impact and, for PostCSS, no
+      # patched release yet — 8.5.23 still carries GHSA-r28c-9q8g-f849. Every one
+      # is a devDependency of the test toolchain; the published package `files`
+      # allowlist is source, dist, contract and docs, so none of this reaches a
+      # consumer.
+      #
+      # Accepted by exact advisory id rather than by lowering --audit-level or
+      # dropping the step, so a NEW advisory still fails the build. Revisit when
+      # PostCSS and Vitest ship fixes; removing an id here should make CI red
+      # again if it is still unpatched.
+      # GHSA-r28c-9q8g-f849 — postcss: path traversal via sourceMappingURL; no patched release
       - name: Audit dependencies
-        run: bun audit
+        run: bun audit \
+          --ignore=GHSA-r28c-9q8g-f849
 
       - name: Typecheck, test, and verify committed output
         run: bun run check
