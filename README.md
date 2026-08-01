@@ -226,6 +226,31 @@ reference provide the common vectors and framing implementation.
 This package does not provide sessions, CAIL API keys, model routing, quotas,
 or custom error handling.
 
+## Identity keyring transport (`contract/identity-keyring-v1.json`)
+
+A signed-in person may need more than one audience-bound token: one for the
+application they are using, and one for CAIL Model API when that application
+acts on their behalf. Forwarding the application's own token to the gateway is
+the token-passthrough anti-pattern and fails exact-audience verification by
+design. The keyring is the sanctioned alternative: the issuing doorway mints
+every leg in one sign-in event and delivers them as two headers, one compact
+JWS each.
+
+- `CAIL_IDENTITY_JWT_HEADER` (`x-cail-identity-jwt`) — the token addressed to
+  the receiving application's own audience.
+- `CAIL_GATEWAY_IDENTITY_JWT_HEADER` (`x-cail-gateway-identity-jwt`) —
+  optional; the same person's `cail:gateway`-audience token, forwarded
+  verbatim to CAIL Model API and never read as authority by the application.
+
+`readIdentityKeyring(headers)` is transport parsing only and fails the whole
+keyring closed on any present-but-malformed leg. `identityKeyringHeaders`
+renders headers a reader will accept, or throws. Before storing or forwarding
+the gateway leg, applications MUST call `verifyKeyringGatewayJwt(keyring,
+gatewayConfig, verifiedAppSubject)` — full verification against a
+`cail:gateway`-audience config plus the invariant that both legs name the
+same person. A keyring never weakens each service's own verification: every
+receiver still verifies its own leg with `verifyIdentityJwt`.
+
 ## Test fixtures (`@cuny-ai-lab/cail-identity/testing`)
 
 Consumers used to invent structurally invalid subjects in tests

@@ -603,3 +603,94 @@ export async function verifyIdentityJwt(token, config) {
         return null;
     }
 }
+/* ── Identity keyring transport (contract/identity-keyring-v1.json) ────── */
+/**
+ * Header carrying the identity JWT addressed to the receiving application's
+ * own audience. Canonical name for what every consumer already reads.
+ */
+export const CAIL_IDENTITY_JWT_HEADER = "x-cail-identity-jwt";
+/**
+ * Header carrying the same person's gateway-audience identity JWT
+ * (`aud: "cail:gateway"`), for the application to forward verbatim to CAIL
+ * Model API when acting for the person. Optional: only routes whose tools
+ * call the gateway receive it.
+ */
+export const CAIL_GATEWAY_IDENTITY_JWT_HEADER = "x-cail-gateway-identity-jwt";
+/** The audience every gateway keyring leg must carry. */
+export const CAIL_GATEWAY_AUDIENCE = "cail:gateway";
+const KEYRING_JWT_MAX_LENGTH = 8_192;
+const COMPACT_JWS_PATTERN = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
+function isCompactJwsShape(value) {
+    return (typeof value === "string" &&
+        value.length > 0 &&
+        value.length <= KEYRING_JWT_MAX_LENGTH &&
+        COMPACT_JWS_PATTERN.test(value));
+}
+/**
+ * Read a keyring from request headers. Structural transport parsing only —
+ * no signature, audience, expiry, or subject checks happen here.
+ *
+ * Fail-closed rule: a header that is present but not a single well-shaped
+ * compact JWS invalidates the whole keyring (`null`), rather than salvaging
+ * the other leg. Duplicate headers join with a comma and therefore fail the
+ * shape check by construction. An absent identity header yields `null`; an
+ * absent gateway header yields a keyring without that leg.
+ */
+export function readIdentityKeyring(headers) {
+    const appJwt = headers.get(CAIL_IDENTITY_JWT_HEADER);
+    if (appJwt === null)
+        return null;
+    if (!isCompactJwsShape(appJwt))
+        return null;
+    const gatewayJwt = headers.get(CAIL_GATEWAY_IDENTITY_JWT_HEADER);
+    if (gatewayJwt === null)
+        return { appJwt };
+    if (!isCompactJwsShape(gatewayJwt))
+        return null;
+    return { appJwt, gatewayJwt };
+}
+/**
+ * Render a keyring as the headers the doorway (or a test harness) attaches.
+ * Throws on structurally invalid tokens: a proxy must never emit a keyring
+ * that its own reader would reject.
+ */
+export function identityKeyringHeaders(keyring) {
+    if (!isCompactJwsShape(keyring.appJwt)) {
+        throw new TypeError("appJwt is not a compact JWS.");
+    }
+    if (keyring.gatewayJwt === undefined) {
+        return { [CAIL_IDENTITY_JWT_HEADER]: keyring.appJwt };
+    }
+    if (!isCompactJwsShape(keyring.gatewayJwt)) {
+        throw new TypeError("gatewayJwt is not a compact JWS.");
+    }
+    return {
+        [CAIL_IDENTITY_JWT_HEADER]: keyring.appJwt,
+        [CAIL_GATEWAY_IDENTITY_JWT_HEADER]: keyring.gatewayJwt,
+    };
+}
+/**
+ * Verify a keyring's gateway leg before the application stores or forwards
+ * it: full {@link verifyIdentityJwt} verification against a gateway-audience
+ * config, plus the keyring invariant that its subject equals the already
+ * verified app-leg subject. Returns the gateway leg's identity, or `null`
+ * when the leg is absent, invalid, or belongs to a different person.
+ *
+ * `config` must come from {@link loadIdentityVerifierConfig} with
+ * `expectedAudience: "cail:gateway"`; anything else is a programmer error
+ * and throws, so a misconfigured verifier cannot pass as invalid tokens.
+ */
+export async function verifyKeyringGatewayJwt(keyring, config, expectedSubject) {
+    if (config.expectedAudience !== CAIL_GATEWAY_AUDIENCE) {
+        throw new TypeError(`config.expectedAudience must be "${CAIL_GATEWAY_AUDIENCE}".`);
+    }
+    if (!isCailSubject(expectedSubject)) {
+        throw new TypeError("expectedSubject must be a canonical CAIL subject.");
+    }
+    if (keyring.gatewayJwt === undefined)
+        return null;
+    const identity = await verifyIdentityJwt(keyring.gatewayJwt, config);
+    if (identity === null)
+        return null;
+    return identity.subject === expectedSubject ? identity : null;
+}

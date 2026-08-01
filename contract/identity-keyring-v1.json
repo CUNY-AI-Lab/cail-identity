@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cuny-ai-lab.invalid/contracts/identity-keyring-v1.json",
+  "title": "CAIL identity keyring transport",
+  "$comment": "How a signed-in person's audience-bound identity JWTs travel from the issuing doorway to an application. Two HTTP headers, one compact RS256 JWS each: x-cail-identity-jwt carries the token whose aud is the receiving application's own audience; x-cail-gateway-identity-jwt, when present, carries a token for the SAME subject with aud exactly 'cail:gateway', which the application forwards verbatim to CAIL Model API when acting for the person. The issuer mints every leg of a keyring in one sign-in event: same iss, same sub, same exp discipline. An application MUST verify its own leg (verifyIdentityJwt, its own audience) before trusting anything, MUST NOT read claims from the gateway leg as authority, and before storing or forwarding the gateway leg MUST verify it against audience 'cail:gateway' and require its sub to equal the verified app-leg subject (verifyKeyringGatewayJwt). A present-but-malformed header invalidates the whole keyring: readers fail closed rather than salvage legs. Rationale: RFC 8725 §3.8 exact-audience discipline with per-resource tokens (RFC 8693 family) instead of token passthrough.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["app_jwt"],
+  "properties": {
+    "app_jwt": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8192,
+      "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+      "$comment": "Header x-cail-identity-jwt. aud = the receiving application's audience."
+    },
+    "gateway_jwt": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8192,
+      "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+      "$comment": "Header x-cail-gateway-identity-jwt. aud = 'cail:gateway'; sub MUST equal the verified app-leg subject."
+    }
+  },
+  "examples": [
+    {
+      "app_jwt": "eyJhbGciOiJSUzI1NiIsImtpZCI6ImsxIn0.eyJhdWQiOiJjYWlsOnNpdGUtc3R1ZGlvIn0.c2ln",
+      "gateway_jwt": "eyJhbGciOiJSUzI1NiIsImtpZCI6ImsxIn0.eyJhdWQiOiJjYWlsOmdhdGV3YXkifQ.c2ln"
+    }
+  ]
+}
