@@ -63,6 +63,9 @@ describe("release version authority", () => {
     expect(publishWorkflow).not.toContain("NODE_AUTH_TOKEN");
     expect(publishWorkflow).not.toContain("NPM_CONFIG_USERCONFIG");
     expect(publishWorkflow).not.toMatch(/>\s*\.npmrc/);
+    expect(publishWorkflow).toContain(
+      "NPM_CONFIG_REGISTRY: https://npm.pkg.github.com",
+    );
   });
 
   it("uses Bun's token authority without writing checkout credentials", () => {
@@ -76,6 +79,7 @@ describe("release version authority", () => {
         encoding: "utf8",
         env: {
           ...process.env,
+          NPM_CONFIG_REGISTRY: "https://npm.pkg.github.com",
           NPM_CONFIG_TOKEN: "workflow-dry-run-placeholder",
         },
         timeout: 120_000,
