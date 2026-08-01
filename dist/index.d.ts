@@ -168,5 +168,60 @@ export declare function loadIdentityVerifierConfig(input: LoadIdentityVerifierCo
  * throws, so it cannot be mislabeled as invalid credentials.
  */
 export declare function verifyIdentityJwt(token: string, config: IdentityVerifierConfig): Promise<CailIdentity | null>;
+/**
+ * Header carrying the identity JWT addressed to the receiving application's
+ * own audience. Canonical name for what every consumer already reads.
+ */
+export declare const CAIL_IDENTITY_JWT_HEADER = "x-cail-identity-jwt";
+/**
+ * Header carrying the same person's gateway-audience identity JWT
+ * (`aud: "cail:gateway"`), for the application to forward verbatim to CAIL
+ * Model API when acting for the person. Optional: only routes whose tools
+ * call the gateway receive it.
+ */
+export declare const CAIL_GATEWAY_IDENTITY_JWT_HEADER = "x-cail-gateway-identity-jwt";
+/** The audience every gateway keyring leg must carry. */
+export declare const CAIL_GATEWAY_AUDIENCE = "cail:gateway";
+/**
+ * A signed-in person's audience-bound tokens as delivered by the issuing
+ * doorway. Transport shape only — nothing here is verified. The application
+ * MUST verify `appJwt` against its own audience before trusting anything,
+ * and MUST pass `gatewayJwt` through {@link verifyKeyringGatewayJwt} before
+ * storing or forwarding it. Claims inside `gatewayJwt` are never authority
+ * for the application.
+ */
+export interface IdentityKeyring {
+    appJwt: string;
+    gatewayJwt?: string;
+}
+/**
+ * Read a keyring from request headers. Structural transport parsing only —
+ * no signature, audience, expiry, or subject checks happen here.
+ *
+ * Fail-closed rule: a header that is present but not a single well-shaped
+ * compact JWS invalidates the whole keyring (`null`), rather than salvaging
+ * the other leg. Duplicate headers join with a comma and therefore fail the
+ * shape check by construction. An absent identity header yields `null`; an
+ * absent gateway header yields a keyring without that leg.
+ */
+export declare function readIdentityKeyring(headers: Headers): IdentityKeyring | null;
+/**
+ * Render a keyring as the headers the doorway (or a test harness) attaches.
+ * Throws on structurally invalid tokens: a proxy must never emit a keyring
+ * that its own reader would reject.
+ */
+export declare function identityKeyringHeaders(keyring: IdentityKeyring): Record<string, string>;
+/**
+ * Verify a keyring's gateway leg before the application stores or forwards
+ * it: full {@link verifyIdentityJwt} verification against a gateway-audience
+ * config, plus the keyring invariant that its subject equals the already
+ * verified app-leg subject. Returns the gateway leg's identity, or `null`
+ * when the leg is absent, invalid, or belongs to a different person.
+ *
+ * `config` must come from {@link loadIdentityVerifierConfig} with
+ * `expectedAudience: "cail:gateway"`; anything else is a programmer error
+ * and throws, so a misconfigured verifier cannot pass as invalid tokens.
+ */
+export declare function verifyKeyringGatewayJwt(keyring: IdentityKeyring, config: IdentityVerifierConfig, expectedSubject: string): Promise<CailIdentity | null>;
 export {};
 //# sourceMappingURL=index.d.ts.map

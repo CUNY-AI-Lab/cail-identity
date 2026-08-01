@@ -36,12 +36,12 @@ describe("release version authority", () => {
   it("records the occupied release and preserves behavior bytes", () => {
     expect(isValidAuthority(authority)).toBe(true);
     expect(runtimeDigest()).toBe(
-      "37a34bf368b87a13680b6294f64be5b303ac1c6e9d4d58505cf9591531f3dbe3",
+      "2300e88d443a6badb87dc34b73bcb8f41fc3e53f740938357d1e490fb06ea93a",
     );
   });
 
   it("rechecks live authority immediately before a future publish", () => {
-    expect(packageJson.version).toBe("5.0.1");
+    expect(packageJson.version).toBe("5.1.0");
     expect(packageJson.scripts.prepublishOnly).toContain(
       "bun run check:clean",
     );
@@ -84,7 +84,7 @@ describe("release version authority", () => {
     const output = (result.stdout ?? "") + (result.stderr ?? "");
     expect(result.status).toBe(0);
     expect(output).toContain(
-      "+ @cuny-ai-lab/cail-identity@5.0.1 (dry-run)",
+      "+ @cuny-ai-lab/cail-identity@5.1.0 (dry-run)",
     );
     expect(existsSync(npmrc)).toBe(false);
   });
@@ -121,7 +121,7 @@ describe("release version authority", () => {
         ...live,
         {
           id: 1,
-          name: "5.0.1",
+          name: "5.1.0",
           created_at: "2026-07-25T18:00:00Z",
         },
       ]),
