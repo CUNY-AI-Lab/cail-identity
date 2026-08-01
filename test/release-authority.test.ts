@@ -105,10 +105,70 @@ describe("release version authority", () => {
         ...authority,
         registry: {
           ...authority.registry,
-          candidate_state: "published",
+          candidate_state: "not_published",
+          workflow_receipt: authority.registry.workflow_receipt,
+          candidate_state_scope: "current_registry_state",
         },
       }),
     ).toBe(false);
+    expect(
+      isValidAuthority({
+        ...authority,
+        registry: {
+          ...authority.registry,
+          candidate_state: "published",
+          workflow_receipt: {
+            ...authority.registry.workflow_receipt,
+            commit: "forged",
+          },
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it("records a bounded workflow receipt without claiming registry availability", () => {
+    expect(authority.registry.candidate_state).toBe("not_published");
+    expect(authority.registry.candidate_state_scope).toBe(
+      "last_registry_observation",
+    );
+    expect(authority.registry.workflow_receipt).toMatchObject({
+      source: "github-actions-publish-workflow",
+      claim: "workflow_completed_successfully_registry_unverified",
+      observed_at: "2026-08-01T18:40:58Z",
+      workflow_run_id: 30709375309,
+      workflow_job_id: 91394005405,
+      run_status: "completed",
+      run_conclusion: "success",
+      tag: "v5.1.0",
+      commit: "15f3c6b92c79ab13a9d84df1061d72fabe4ad5e9",
+      published_at: "2026-08-01T17:00:16Z",
+    });
+  });
+
+  it("requires a non-null plain receipt with the exact closed key set", () => {
+    const receipt = authority.registry.workflow_receipt;
+    const cases = [
+      ["missing", (() => {
+        const registry = { ...authority.registry };
+        delete registry.workflow_receipt;
+        return registry;
+      })()],
+      ["null", { ...authority.registry, workflow_receipt: null }],
+      ["array", { ...authority.registry, workflow_receipt: [] }],
+      ["extra", {
+        ...authority.registry,
+        workflow_receipt: { ...receipt, extra: true },
+      }],
+      ["mismatched", {
+        ...authority.registry,
+        workflow_receipt: { ...receipt, run_conclusion: "failure" },
+      }],
+    ] as const;
+    for (const [label, registry] of cases) {
+      const candidate = { ...authority, registry };
+      expect(() => isValidAuthority(candidate), label).not.toThrow();
+      expect(isValidAuthority(candidate), label).toBe(false);
+    }
   });
 
   it("requires the exact old registry identity and candidate absence", () => {

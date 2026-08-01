@@ -36,8 +36,73 @@ type Authority = {
     observed_at?: unknown;
     published_versions?: unknown;
     candidate_state?: unknown;
+    candidate_state_scope?: unknown;
+    workflow_receipt?: unknown;
   };
 };
+
+const workflowReceiptKeys = [
+  "source",
+  "claim",
+  "observed_at",
+  "workflow_run_id",
+  "workflow_run_url",
+  "workflow_job_id",
+  "workflow_job_url",
+  "run_status",
+  "run_conclusion",
+  "release_id",
+  "release_url",
+  "tag",
+  "commit",
+  "published_at",
+] as const;
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  try {
+    return Object.getPrototypeOf(value) === Object.prototype;
+  } catch {
+    return false;
+  }
+}
+
+function isValidWorkflowReceipt(value: unknown): boolean {
+  if (!isPlainObject(value)) return false;
+  try {
+    const keys = Reflect.ownKeys(value);
+    if (
+      keys.length !== workflowReceiptKeys.length ||
+      !workflowReceiptKeys.every((key) => keys.includes(key))
+    ) {
+      return false;
+    }
+    return (
+      value.source === "github-actions-publish-workflow" &&
+      value.claim === "workflow_completed_successfully_registry_unverified" &&
+      value.observed_at === "2026-08-01T18:40:58Z" &&
+      value.workflow_run_id === 30709375309 &&
+      value.workflow_run_url ===
+        "https://github.com/CUNY-AI-Lab/cail-identity/actions/runs/30709375309" &&
+      value.workflow_job_id === 91394005405 &&
+      value.workflow_job_url ===
+        "https://github.com/CUNY-AI-Lab/cail-identity/actions/runs/30709375309/job/91394005405" &&
+      value.run_status === "completed" &&
+      value.run_conclusion === "success" &&
+      value.release_id === 363577354 &&
+      value.release_url ===
+        "https://github.com/CUNY-AI-Lab/cail-identity/releases/tag/v5.1.0" &&
+      value.tag === "v5.1.0" &&
+      value.commit ===
+        "15f3c6b92c79ab13a9d84df1061d72fabe4ad5e9" &&
+      value.published_at === "2026-08-01T17:00:16Z"
+    );
+  } catch {
+    return false;
+  }
+}
 
 function filesBelow(path: string): string[] {
   return readdirSync(path, { recursive: true, withFileTypes: true })
@@ -59,8 +124,14 @@ export function runtimeDigest(): string {
 }
 
 export function isValidAuthority(authority: Authority): boolean {
-  const published = authority.registry?.published_versions;
-  return (
+  try {
+    if (!isPlainObject(authority) || !isPlainObject(authority.registry)) {
+      return false;
+    }
+    const registry = authority.registry;
+    const published = registry.published_versions;
+    const candidateState = registry.candidate_state;
+    return (
     authority.schema_version === 1 &&
     authority.package?.name === "@cuny-ai-lab/cail-identity" &&
     authority.package?.candidate_version === "5.1.0" &&
@@ -72,11 +143,13 @@ export function isValidAuthority(authority: Authority): boolean {
       JSON.stringify(["contract", "src"]) &&
     authority.behavior_authority?.runtime_sha256 ===
       expectedRuntimeSha256 &&
-    authority.registry?.url === "https://npm.pkg.github.com" &&
-    authority.registry?.api ===
+    registry.url === "https://npm.pkg.github.com" &&
+    registry.api ===
       "https://api.github.com/orgs/CUNY-AI-Lab/packages/npm/cail-identity/versions" &&
-    typeof authority.registry?.observed_at === "string" &&
-    authority.registry.candidate_state === "not_published" &&
+    typeof registry.observed_at === "string" &&
+    candidateState === "not_published" &&
+    registry.candidate_state_scope === "last_registry_observation" &&
+    isValidWorkflowReceipt(registry.workflow_receipt) &&
     Array.isArray(published) &&
     published.some(
       (entry) =>
@@ -88,7 +161,10 @@ export function isValidAuthority(authority: Authority): boolean {
         (entry as Record<string, unknown>).published_at ===
           "2026-07-25T17:27:05Z",
     )
-  );
+    );
+  } catch {
+    return false;
+  }
 }
 
 export function isValidLiveVersions(versions: Version[]): boolean {

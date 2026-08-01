@@ -49,6 +49,23 @@
         "published_at": "2026-07-19T19:27:43Z"
       }
     ],
-    "candidate_state": "not_published"
+    "candidate_state": "not_published",
+    "candidate_state_scope": "last_registry_observation",
+    "workflow_receipt": {
+      "source": "github-actions-publish-workflow",
+      "claim": "workflow_completed_successfully_registry_unverified",
+      "observed_at": "2026-08-01T18:40:58Z",
+      "workflow_run_id": 30709375309,
+      "workflow_run_url": "https://github.com/CUNY-AI-Lab/cail-identity/actions/runs/30709375309",
+      "workflow_job_id": 91394005405,
+      "workflow_job_url": "https://github.com/CUNY-AI-Lab/cail-identity/actions/runs/30709375309/job/91394005405",
+      "run_status": "completed",
+      "run_conclusion": "success",
+      "release_id": 363577354,
+      "release_url": "https://github.com/CUNY-AI-Lab/cail-identity/releases/tag/v5.1.0",
+      "tag": "v5.1.0",
+      "commit": "15f3c6b92c79ab13a9d84df1061d72fabe4ad5e9",
+      "published_at": "2026-08-01T17:00:16Z"
+    }
   }
 }
