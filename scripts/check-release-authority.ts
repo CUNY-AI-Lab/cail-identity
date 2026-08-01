@@ -13,7 +13,7 @@ const authorityPath = resolve(
   "evidence/package-release-authority.json",
 );
 const expectedRuntimeSha256 =
-  "37a34bf368b87a13680b6294f64be5b303ac1c6e9d4d58505cf9591531f3dbe3";
+  "2300e88d443a6badb87dc34b73bcb8f41fc3e53f740938357d1e490fb06ea93a";
 
 type Version = {
   id?: unknown;
@@ -63,11 +63,11 @@ export function isValidAuthority(authority: Authority): boolean {
   return (
     authority.schema_version === 1 &&
     authority.package?.name === "@cuny-ai-lab/cail-identity" &&
-    authority.package?.candidate_version === "5.0.1" &&
+    authority.package?.candidate_version === "5.1.0" &&
     authority.behavior_authority?.commit ===
-      "f1c4dea47c3e67af07cf2a8d0f65bc9d81c315b2" &&
+      "949839868f5bdac6ceb936fd83fe298aff3ad60c" &&
     authority.behavior_authority?.tree ===
-      "84770f80d24cf1e6928aec0da833be34d31a7eb6" &&
+      "7d008404aefa2b7ad981b5747f8522fd162fb356" &&
     JSON.stringify(authority.behavior_authority?.runtime_paths) ===
       JSON.stringify(["contract", "src"]) &&
     authority.behavior_authority?.runtime_sha256 ===
@@ -98,7 +98,7 @@ export function isValidLiveVersions(versions: Version[]): boolean {
         version.id === 1066308573 &&
         version.name === "5.0.0" &&
         version.created_at === "2026-07-25T17:27:05Z",
-    ) && !versions.some((version) => version.name === "5.0.1")
+    ) && !versions.some((version) => version.name === "5.1.0")
   );
 }
 
@@ -112,7 +112,7 @@ function main(): void {
   if (
     !isValidAuthority(authority) ||
     packageJson.name !== "@cuny-ai-lab/cail-identity" ||
-    packageJson.version !== "5.0.1" ||
+    packageJson.version !== "5.1.0" ||
     runtimeDigest() !== expectedRuntimeSha256 ||
     statSync(authorityPath).size === 0
   ) {
@@ -132,7 +132,7 @@ function main(): void {
     ) as Version[];
     if (!Array.isArray(versions) || !isValidLiveVersions(versions)) {
       throw new Error(
-        "cail-identity: registry version authority changed or 5.0.1 already exists",
+        "cail-identity: registry version authority changed or 5.1.0 already exists",
       );
     }
   }
