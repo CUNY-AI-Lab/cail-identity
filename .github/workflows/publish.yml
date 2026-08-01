@@ -37,8 +37,12 @@ jobs:
             bun run check:release-live
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Without an explicit registry, bun publish targets registry.npmjs.org —
+      # the 5.1.0 release run 404ed there. bun honors NPM_CONFIG_REGISTRY, so
+      # the scoped registry rides the same no-npmrc env discipline as the token.
       - name: Publish to GitHub Packages
         run: bun publish
         env:
           CAIL_REGISTRY_VERSIONS_FILE: ${{ runner.temp }}/cail-identity-package-versions.json
+          NPM_CONFIG_REGISTRY: https://npm.pkg.github.com
           NPM_CONFIG_TOKEN: ${{ secrets.GITHUB_TOKEN }}
