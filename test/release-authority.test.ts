@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   isValidArtifactIdentity,
+  isValidCandidateAuthority,
   isValidHistoricalAuthority,
   isValidLiveVersions,
   isValidPublishedAuthority,
@@ -23,6 +24,12 @@ const historicalAuthority = JSON.parse(
 const publishedAuthority = JSON.parse(
   readFileSync(
     resolve(root, "evidence/package-release-authority-published.json"),
+    "utf8",
+  ),
+);
+const candidateAuthority = JSON.parse(
+  readFileSync(
+    resolve(root, "evidence/package-release-authority-candidate-5.1.1.json"),
     "utf8",
   ),
 );
@@ -87,7 +94,10 @@ describe("release version authority", () => {
   it("preserves the dated candidate observation separately from the published authority", () => {
     expect(isValidHistoricalAuthority(historicalAuthority)).toBe(true);
     expect(isValidPublishedAuthority(publishedAuthority)).toBe(true);
+    expect(isValidCandidateAuthority(candidateAuthority)).toBe(true);
     expect(historicalAuthority.package.candidate_version).toBe("5.1.0");
+    expect(candidateAuthority.package.candidate_version).toBe("5.1.1");
+    expect(candidateAuthority.registry).not.toHaveProperty("workflow_receipt");
     expect(publishedAuthority.package).toEqual({
       name: "@cuny-ai-lab/cail-identity",
       version: "5.1.0",
@@ -103,7 +113,7 @@ describe("release version authority", () => {
 
   it("derives the current runtime and validates source/tag and artifact identity", () => {
     expect(runtimeDigest()).toBe(
-      "2300e88d443a6badb87dc34b73bcb8f41fc3e53f740938357d1e490fb06ea93a",
+      "120e9cd9002b1fa6d9f9a61b07ffbabef8d17159bb36862849b1b51d8ca603a7",
     );
     expect(isValidPublishedSourceTag(publishedAuthority.release)).toBe(true);
     expect(
@@ -256,7 +266,7 @@ describe("release version authority", () => {
   });
 
   it("keeps the live publish boundary explicit", () => {
-    expect(packageJson.version).toBe("5.1.0");
+    expect(packageJson.version).toBe("5.1.1");
     expect(packageJson.scripts.prepublishOnly).toContain(
       "bun run check:release-live",
     );
@@ -312,7 +322,7 @@ describe("release version authority", () => {
     const output = (result.stdout ?? "") + (result.stderr ?? "");
     expect(result.status).toBe(0);
     expect(output).toContain(
-      "+ @cuny-ai-lab/cail-identity@5.1.0 (dry-run)",
+      "+ @cuny-ai-lab/cail-identity@5.1.1 (dry-run)",
     );
     expect(existsSync(npmrc)).toBe(false);
   });
