@@ -384,6 +384,12 @@ describe("release version authority", () => {
     );
     expect(publishWorkflow).toContain("bun run check:release-ref");
     expect(publishWorkflow).toContain("GITHUB_SHA: ${{ github.sha }}");
+    expect(publishWorkflow).toContain(
+      "GITHUB_REF_TYPE: ${{ github.ref_type }}",
+    );
+    expect(publishWorkflow).toContain(
+      "GITHUB_REF_NAME: ${{ github.ref_name }}",
+    );
     expect(publishWorkflow).toContain("gh api --paginate");
     expect(publishWorkflow).toContain("CAIL_REGISTRY_VERSIONS_FILE");
     expect(publishWorkflow).toContain("bun run check:release-live");
@@ -394,11 +400,66 @@ describe("release version authority", () => {
     expect(publishWorkflow).not.toContain("NPM_CONFIG_USERCONFIG");
     expect(publishWorkflow).not.toMatch(/>\s*\.npmrc/);
     expect(publishWorkflow).toContain(
-      "NPM_CONFIG_REGISTRY: https://npm.pkg.github.com",
+      "run: bun publish --registry https://npm.pkg.github.com",
     );
+    expect(publishWorkflow).not.toContain("NPM_CONFIG_REGISTRY");
     expect(ciWorkflow).toContain(
       "bun install --frozen-lockfile --ignore-scripts",
     );
+  });
+
+  it("keeps the publish recovery workflow fail-closed", () => {
+    expect(publishWorkflow).toContain("workflow_dispatch:");
+    expect(publishWorkflow).toContain("release_tag:");
+    expect(publishWorkflow).toContain("type: string");
+    expect(publishWorkflow).toContain(
+      "DISPATCH_RELEASE_TAG: ${{ inputs.release_tag }}",
+    );
+    expect(publishWorkflow).toContain(
+      "RELEASE_EVENT_TAG: ${{ github.event.release.tag_name }}",
+    );
+    expect(publishWorkflow).toContain('case "$EVENT_NAME" in');
+    expect(publishWorkflow).toContain("release)");
+    expect(publishWorkflow).toContain("workflow_dispatch)");
+    expect(publishWorkflow).toContain(
+      'if [[ ! "$release_tag" =~ ^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$ ]]; then',
+    );
+    expect(publishWorkflow).toContain(
+      'if [[ "$EVENT_NAME" == "workflow_dispatch" ]]',
+    );
+    expect(publishWorkflow).toContain("jq -e '.immutable == true'");
+    expect(publishWorkflow).toContain("/compare/${tag_sha}...${branch_sha}");
+    expect(publishWorkflow).toContain(
+      '(.status == "identical" or .status == "ahead")',
+    );
+    expect(publishWorkflow).toContain(".behind_by == 0");
+    expect(publishWorkflow).toContain(
+      "ref: ${{ github.event.repository.default_branch }}",
+    );
+    expect(publishWorkflow).toContain(
+      "ref: ${{ steps.release.outputs.tag }}",
+    );
+    expect(publishWorkflow).toContain("fetch-depth: 0");
+    expect(publishWorkflow).toContain("GITHUB_REF_TYPE: ${{ github.ref_type }}");
+    expect(publishWorkflow).toContain("GITHUB_REF_NAME: ${{ github.ref_name }}");
+    expect(publishWorkflow).toContain(
+      "if: github.event_name == 'workflow_dispatch'",
+    );
+    expect(publishWorkflow).toContain(
+      'expected_version="${RELEASE_TAG#v}"',
+    );
+    expect(publishWorkflow).toContain(
+      'if: github.event_name == \'release\'',
+    );
+    expect(publishWorkflow).not.toContain("GITHUB_REF_TYPE: tag");
+    expect(publishWorkflow).not.toContain(
+      "GITHUB_REF_NAME: ${{ steps.release.outputs.tag }}",
+    );
+    expect(publishWorkflow).not.toContain(
+      "GITHUB_SHA: ${{ steps.release.outputs.sha }}",
+    );
+    expect(publishWorkflow).not.toContain("github.event.inputs");
+    expect(publishWorkflow).not.toContain("github.event.client_payload");
   });
 
   it("documents the immutable README defect in the already-published artifact", () => {
