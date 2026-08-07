@@ -13,6 +13,33 @@
     ],
     "runtime_sha256": "120e9cd9002b1fa6d9f9a61b07ffbabef8d17159bb36862849b1b51d8ca603a7"
   },
+  "source": {
+    "tag": "v5.1.1",
+    "commit": "0d5b91846327661e8a630e86d3bc442b60f97224",
+    "tree": "75fd5bc745a084bd48d3afc66a1bc14f7795fc17"
+  },
+  "package_payload": {
+    "tarball_sha256": "6ebe02c1ea3ed0adc1347217cc56478097f8019a71cfc82aea5b5c23af0f7363",
+    "tarball_bytes": 37718,
+    "files": [
+      "LICENSE",
+      "README.md",
+      "contract/identity-jwt-claims-v1.json",
+      "contract/identity-keyring-v1.json",
+      "contract/principal-v1.json",
+      "contract/subject-derivation-v2.json",
+      "contract/subject-derivation-v2.lua",
+      "dist/index.d.ts",
+      "dist/index.d.ts.map",
+      "dist/index.js",
+      "dist/testing.d.ts",
+      "dist/testing.d.ts.map",
+      "dist/testing.js",
+      "package.json",
+      "src/index.ts",
+      "src/testing.ts"
+    ]
+  },
   "registry": {
     "url": "https://npm.pkg.github.com",
     "api": "https://api.github.com/orgs/CUNY-AI-Lab/packages/npm/cail-identity/versions",

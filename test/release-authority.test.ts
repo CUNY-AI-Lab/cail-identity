@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import {
   isValidArtifactIdentity,
   isValidCandidateAuthority,
+  isValidCandidatePackagePayload,
+  isValidCandidateSource,
   isValidHistoricalAuthority,
   isValidLiveVersions,
   isValidPublishedAuthority,
@@ -27,6 +29,10 @@ const publishedAuthority = JSON.parse(
     "utf8",
   ),
 );
+const publishedAuthorityText = readFileSync(
+  resolve(root, "evidence/package-release-authority-published.json"),
+  "utf8",
+);
 const candidateAuthority = JSON.parse(
   readFileSync(
     resolve(root, "evidence/package-release-authority-candidate-5.1.1.json"),
@@ -40,6 +46,10 @@ const releaseAuthorityScript = readFileSync(
   resolve(root, "scripts/check-release-authority.ts"),
   "utf8",
 );
+const releaseRefScript = readFileSync(
+  resolve(root, "scripts/check-release-ref.ts"),
+  "utf8",
+);
 const publishWorkflow = readFileSync(
   resolve(root, ".github/workflows/publish.yml"),
   "utf8",
@@ -50,13 +60,16 @@ const ciWorkflow = readFileSync(
   "utf8",
 );
 
-const currentHead = "a".repeat(40);
+const reviewedBehaviorCommit = candidateAuthority.source.commit;
+const reviewedBehaviorTree = candidateAuthority.source.tree;
+const releaseHead = "fdc6adbdd2905c7253999ee47ad14a36a9cb94f2";
 const oldHead = "b".repeat(40);
+const runtimeSha256 = candidateAuthority.behavior_authority.runtime_sha256;
+const packagePayload = candidateAuthority.package_payload;
 
 function releaseApi(
   tagSha: string,
   branchSha: string,
-  treeSha = "c".repeat(40),
 ): GithubJson {
   const responses = new Map<string, unknown>([
     [
@@ -68,12 +81,8 @@ function releaseApi(
       { object: { sha: branchSha, type: "commit" } },
     ],
     [
-      "/repos/CUNY-AI-Lab/cail-identity/git/ref/tags/v5.1.0",
+      "/repos/CUNY-AI-Lab/cail-identity/git/ref/tags/v5.1.1",
       { object: { sha: tagSha, type: "commit" } },
-    ],
-    [
-      `/repos/CUNY-AI-Lab/cail-identity/git/commits/${tagSha}`,
-      { tree: { sha: treeSha } },
     ],
   ]);
   return async (path) => {
@@ -83,11 +92,15 @@ function releaseApi(
 }
 
 const exactReleaseContext = {
-  packageVersion: "5.1.0",
+  packageVersion: "5.1.1",
   repository: "CUNY-AI-Lab/cail-identity",
   refType: "tag",
-  refName: "v5.1.0",
-  sha: currentHead,
+  refName: "v5.1.1",
+  sha: releaseHead,
+  expectedRuntimeSha256: runtimeSha256,
+  actualRuntimeSha256: runtimeSha256,
+  expectedPackagePayload: packagePayload,
+  actualPackagePayload: packagePayload,
 } as const;
 
 describe("release version authority", () => {
@@ -95,9 +108,15 @@ describe("release version authority", () => {
     expect(isValidHistoricalAuthority(historicalAuthority)).toBe(true);
     expect(isValidPublishedAuthority(publishedAuthority)).toBe(true);
     expect(isValidCandidateAuthority(candidateAuthority)).toBe(true);
+    expect(isValidCandidateSource(candidateAuthority.source)).toBe(true);
     expect(historicalAuthority.package.candidate_version).toBe("5.1.0");
     expect(candidateAuthority.package.candidate_version).toBe("5.1.1");
     expect(candidateAuthority.registry).not.toHaveProperty("workflow_receipt");
+    expect(candidateAuthority.source).toEqual({
+      tag: "v5.1.1",
+      commit: reviewedBehaviorCommit,
+      tree: reviewedBehaviorTree,
+    });
     expect(publishedAuthority.package).toEqual({
       name: "@cuny-ai-lab/cail-identity",
       version: "5.1.0",
@@ -108,7 +127,27 @@ describe("release version authority", () => {
         package: { ...publishedAuthority.package, version: "5.2.0" },
       }),
     ).toBe(false);
+    expect(
+      isValidCandidateAuthority({
+        ...candidateAuthority,
+        source: { ...candidateAuthority.source, commit: "0".repeat(40) },
+      }),
+    ).toBe(false);
+    expect(isValidCandidatePackagePayload(packagePayload)).toBe(true);
+    expect(
+      isValidCandidateAuthority({
+        ...candidateAuthority,
+        source: { ...candidateAuthority.source, extra: true },
+      }),
+    ).toBe(false);
     expect(isValidHistoricalAuthority(historicalAuthority)).toBe(true);
+    expect(isValidPublishedAuthority(publishedAuthority)).toBe(true);
+    expect(
+      readFileSync(
+        resolve(root, "evidence/package-release-authority-published.json"),
+        "utf8",
+      ),
+    ).toBe(publishedAuthorityText);
   });
 
   it("derives the current runtime and validates source/tag and artifact identity", () => {
@@ -172,6 +211,18 @@ describe("release version authority", () => {
       isValidLiveVersions(
         [
           {
+            id: 1088911629,
+            name: "5.1.1",
+            created_at: "2026-08-07T16:37:20Z",
+          },
+        ],
+        "5.1.1",
+      ),
+    ).toBe(false);
+    expect(
+      isValidLiveVersions(
+        [
+          {
             id: 1066308573,
             name: "5.0.0",
             created_at: "2026-07-25T17:27:05Z",
@@ -221,48 +272,85 @@ describe("release version authority", () => {
     }
   });
 
-  it("verifies the release tag, GITHUB_SHA, and live default-branch head", async () => {
+  it("accepts a release-only descendant with the reviewed behavior and payload", async () => {
+    expect(releaseHead).not.toBe(reviewedBehaviorCommit);
+    expect(reviewedBehaviorTree).toBe(
+      candidateAuthority.behavior_authority.tree,
+    );
+    await expect(
+      verifyReleaseRef(exactReleaseContext, releaseApi(releaseHead, releaseHead)),
+    ).resolves.toBeUndefined();
+  });
+
+  it("rejects old, mismatched, drifted, or non-release refs", async () => {
     await expect(
       verifyReleaseRef(
         { ...exactReleaseContext, sha: oldHead },
-        releaseApi(oldHead, currentHead),
+        releaseApi(oldHead, releaseHead),
       ),
     ).rejects.toThrow("live default-branch head");
     await expect(
       verifyReleaseRef(
         { ...exactReleaseContext, sha: oldHead },
-        releaseApi(currentHead, currentHead),
+        releaseApi(releaseHead, releaseHead),
       ),
     ).rejects.toThrow("GITHUB_SHA is not the commit named by the release tag");
     await expect(
       verifyReleaseRef(
         exactReleaseContext,
-        releaseApi(oldHead, currentHead),
+        releaseApi(oldHead, releaseHead),
       ),
     ).rejects.toThrow("GITHUB_SHA is not the commit named by the release tag");
     await expect(
-      verifyReleaseRef(exactReleaseContext, releaseApi(currentHead, currentHead)),
-    ).resolves.toBeUndefined();
+      verifyReleaseRef(
+        { ...exactReleaseContext, actualRuntimeSha256: "0".repeat(64) },
+        releaseApi(releaseHead, releaseHead),
+      ),
+    ).rejects.toThrow("runtime source differs");
     await expect(
       verifyReleaseRef(
         {
           ...exactReleaseContext,
-          expectedCommit: currentHead,
-          expectedTree: "c".repeat(40),
+          actualPackagePayload: {
+            ...packagePayload,
+            tarball_sha256: "0".repeat(64),
+          },
         },
-        releaseApi(currentHead, currentHead),
+        releaseApi(releaseHead, releaseHead),
       ),
-    ).resolves.toBeUndefined();
+    ).rejects.toThrow("packed package payload differs");
     await expect(
       verifyReleaseRef(
         {
           ...exactReleaseContext,
-          expectedCommit: currentHead,
-          expectedTree: "d".repeat(40),
+          actualPackagePayload: {
+            ...packagePayload,
+            files: packagePayload.files.map((file: string) =>
+              file === "src/testing.ts" ? "src/drift.ts" : file,
+            ),
+          },
         },
-        releaseApi(currentHead, currentHead),
+        releaseApi(releaseHead, releaseHead),
       ),
-    ).rejects.toThrow("source tree differs");
+    ).rejects.toThrow("packed package payload differs");
+    await expect(
+      verifyReleaseRef(
+        exactReleaseContext,
+        releaseApi(releaseHead, oldHead),
+      ),
+    ).rejects.toThrow("live default-branch head");
+    await expect(
+      verifyReleaseRef(
+        { ...exactReleaseContext, refType: "branch" },
+        releaseApi(releaseHead, releaseHead),
+      ),
+    ).rejects.toThrow("requires a tag ref");
+    await expect(
+      verifyReleaseRef(
+        { ...exactReleaseContext, refName: "v5.1.0" },
+        releaseApi(releaseHead, releaseHead),
+      ),
+    ).rejects.toThrow("does not match package version");
   });
 
   it("keeps the live publish boundary explicit", () => {
@@ -277,6 +365,12 @@ describe("release version authority", () => {
       "bun scripts/check-release-ref.ts",
     );
     expect(releaseAuthorityScript).toContain("CAIL_REGISTRY_VERSIONS_FILE");
+    expect(releaseRefScript).toContain(
+      "evidence/package-release-authority-candidate-5.1.1.json",
+    );
+    expect(releaseRefScript).not.toContain(
+      "evidence/package-release-authority-published.json",
+    );
     expect(publishWorkflow).toContain("bun run check:release-ref");
     expect(publishWorkflow).toContain("GITHUB_SHA: ${{ github.sha }}");
     expect(publishWorkflow).toContain("gh api --paginate");
