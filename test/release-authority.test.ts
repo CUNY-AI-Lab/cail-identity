@@ -3,60 +3,275 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  isValidAuthority,
+  isValidArtifactIdentity,
+  isValidHistoricalAuthority,
   isValidLiveVersions,
+  isValidPublishedAuthority,
+  isValidPublishedRegistryVersion,
+  isValidPublishedSourceTag,
   runtimeDigest,
 } from "../scripts/check-release-authority.js";
+import {
+  type GithubJson,
+  verifyReleaseRef,
+} from "../scripts/check-release-ref.js";
 
-const authority = JSON.parse(
+const root = resolve(import.meta.dirname, "..");
+const historicalAuthority = JSON.parse(
+  readFileSync(resolve(root, "evidence/package-release-authority.json"), "utf8"),
+);
+const publishedAuthority = JSON.parse(
   readFileSync(
-    resolve(
-      import.meta.dirname,
-      "../evidence/package-release-authority.json",
-    ),
+    resolve(root, "evidence/package-release-authority-published.json"),
     "utf8",
   ),
 );
 const packageJson = JSON.parse(
-  readFileSync(
-    resolve(import.meta.dirname, "../package.json"),
-    "utf8",
-  ),
+  readFileSync(resolve(root, "package.json"), "utf8"),
 );
-const publishWorkflow = readFileSync(
-  resolve(import.meta.dirname, "../.github/workflows/publish.yml"),
+const releaseAuthorityScript = readFileSync(
+  resolve(root, "scripts/check-release-authority.ts"),
   "utf8",
 );
+const publishWorkflow = readFileSync(
+  resolve(root, ".github/workflows/publish.yml"),
+  "utf8",
+);
+const readme = readFileSync(resolve(root, "README.md"), "utf8");
 const ciWorkflow = readFileSync(
-  resolve(import.meta.dirname, "../.github/workflows/ci.yml"),
+  resolve(root, ".github/workflows/ci.yml"),
   "utf8",
 );
 
+const currentHead = "a".repeat(40);
+const oldHead = "b".repeat(40);
+
+function releaseApi(
+  tagSha: string,
+  branchSha: string,
+  treeSha = "c".repeat(40),
+): GithubJson {
+  const responses = new Map<string, unknown>([
+    [
+      "/repos/CUNY-AI-Lab/cail-identity",
+      { default_branch: "main" },
+    ],
+    [
+      "/repos/CUNY-AI-Lab/cail-identity/git/ref/heads/main",
+      { object: { sha: branchSha, type: "commit" } },
+    ],
+    [
+      "/repos/CUNY-AI-Lab/cail-identity/git/ref/tags/v5.1.0",
+      { object: { sha: tagSha, type: "commit" } },
+    ],
+    [
+      `/repos/CUNY-AI-Lab/cail-identity/git/commits/${tagSha}`,
+      { tree: { sha: treeSha } },
+    ],
+  ]);
+  return async (path) => {
+    if (!responses.has(path)) throw new Error(`unexpected API path: ${path}`);
+    return responses.get(path);
+  };
+}
+
+const exactReleaseContext = {
+  packageVersion: "5.1.0",
+  repository: "CUNY-AI-Lab/cail-identity",
+  refType: "tag",
+  refName: "v5.1.0",
+  sha: currentHead,
+} as const;
+
 describe("release version authority", () => {
-  it("records the occupied release and preserves behavior bytes", () => {
-    expect(isValidAuthority(authority)).toBe(true);
+  it("preserves the dated candidate observation separately from the published authority", () => {
+    expect(isValidHistoricalAuthority(historicalAuthority)).toBe(true);
+    expect(isValidPublishedAuthority(publishedAuthority)).toBe(true);
+    expect(historicalAuthority.package.candidate_version).toBe("5.1.0");
+    expect(publishedAuthority.package).toEqual({
+      name: "@cuny-ai-lab/cail-identity",
+      version: "5.1.0",
+    });
+    expect(
+      isValidPublishedAuthority({
+        ...publishedAuthority,
+        package: { ...publishedAuthority.package, version: "5.2.0" },
+      }),
+    ).toBe(false);
+    expect(isValidHistoricalAuthority(historicalAuthority)).toBe(true);
+  });
+
+  it("derives the current runtime and validates source/tag and artifact identity", () => {
     expect(runtimeDigest()).toBe(
       "2300e88d443a6badb87dc34b73bcb8f41fc3e53f740938357d1e490fb06ea93a",
     );
+    expect(isValidPublishedSourceTag(publishedAuthority.release)).toBe(true);
+    expect(
+      isValidPublishedSourceTag({
+        ...publishedAuthority.release,
+        commit: "0".repeat(40),
+      }),
+    ).toBe(false);
+    const artifact = {
+      tarball: publishedAuthority.registry.tarball,
+      artifact_sha1: publishedAuthority.registry.artifact_sha1,
+      integrity: publishedAuthority.registry.integrity,
+      artifact_bytes: publishedAuthority.registry.artifact_bytes,
+      artifact_sha256: publishedAuthority.registry.artifact_sha256,
+      artifact_git_tree_sha256:
+        publishedAuthority.registry.artifact_git_tree_sha256,
+    };
+    expect(isValidArtifactIdentity(artifact)).toBe(true);
+    expect(
+      isValidArtifactIdentity({ ...artifact, artifact_sha256: "forged" }),
+    ).toBe(false);
+    expect(
+      isValidArtifactIdentity({ ...artifact, tarball: `${artifact.tarball}x` }),
+    ).toBe(false);
+    expect(() => isValidArtifactIdentity(null)).not.toThrow();
   });
 
-  it("rechecks live authority immediately before a future publish", () => {
+  it("requires the exact published registry version identity", () => {
+    expect(
+      isValidPublishedRegistryVersion({
+        id: 1088911629,
+        name: "5.1.0",
+        created_at: "2026-08-01T17:01:12Z",
+        updated_at: "2026-08-01T17:01:12Z",
+      }),
+    ).toBe(true);
+    expect(
+      isValidPublishedRegistryVersion({
+        id: 1088911630,
+        name: "5.1.0",
+        created_at: "2026-08-01T17:01:12Z",
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects occupied or malformed live registry snapshots", () => {
+    const available = [
+      {
+        id: 1088911629,
+        name: "5.1.0",
+        created_at: "2026-08-01T17:01:12Z",
+      },
+    ];
+    expect(isValidLiveVersions(available, "5.1.0")).toBe(false);
+    expect(
+      isValidLiveVersions(
+        [
+          {
+            id: 1066308573,
+            name: "5.0.0",
+            created_at: "2026-07-25T17:27:05Z",
+            updated_at: "2026-07-25T17:27:05Z",
+          },
+        ],
+        "5.2.0",
+      ),
+    ).toBe(true);
+    expect(isValidLiveVersions([], "5.2.0")).toBe(false);
+    expect(isValidLiveVersions([{ name: "5.2.0" }], "5.2.0")).toBe(false);
+    expect(isValidLiveVersions(new Array(1), "5.2.0")).toBe(false);
+  });
+
+  it("fails closed for forged, incomplete, and extended authorities", () => {
+    const cases = [
+      null,
+      { ...publishedAuthority, package: { name: "forged", version: "5.1.0" } },
+      {
+        ...publishedAuthority,
+        release: { ...publishedAuthority.release, tree: "0".repeat(40) },
+      },
+      {
+        ...publishedAuthority,
+        behavior_authority: {
+          ...publishedAuthority.behavior_authority,
+          runtime_sha256: "forged",
+        },
+      },
+      {
+        ...publishedAuthority,
+        registry: { ...publishedAuthority.registry, integrity: "forged" },
+      },
+      {
+        ...publishedAuthority,
+        registry: { ...publishedAuthority.registry, extra: true },
+      },
+      (() => {
+        const incomplete = { ...publishedAuthority };
+        delete incomplete.release;
+        return incomplete;
+      })(),
+    ];
+    for (const candidate of cases) {
+      expect(() => isValidPublishedAuthority(candidate)).not.toThrow();
+      expect(isValidPublishedAuthority(candidate)).toBe(false);
+    }
+  });
+
+  it("verifies the release tag, GITHUB_SHA, and live default-branch head", async () => {
+    await expect(
+      verifyReleaseRef(
+        { ...exactReleaseContext, sha: oldHead },
+        releaseApi(oldHead, currentHead),
+      ),
+    ).rejects.toThrow("live default-branch head");
+    await expect(
+      verifyReleaseRef(
+        { ...exactReleaseContext, sha: oldHead },
+        releaseApi(currentHead, currentHead),
+      ),
+    ).rejects.toThrow("GITHUB_SHA is not the commit named by the release tag");
+    await expect(
+      verifyReleaseRef(
+        exactReleaseContext,
+        releaseApi(oldHead, currentHead),
+      ),
+    ).rejects.toThrow("GITHUB_SHA is not the commit named by the release tag");
+    await expect(
+      verifyReleaseRef(exactReleaseContext, releaseApi(currentHead, currentHead)),
+    ).resolves.toBeUndefined();
+    await expect(
+      verifyReleaseRef(
+        {
+          ...exactReleaseContext,
+          expectedCommit: currentHead,
+          expectedTree: "c".repeat(40),
+        },
+        releaseApi(currentHead, currentHead),
+      ),
+    ).resolves.toBeUndefined();
+    await expect(
+      verifyReleaseRef(
+        {
+          ...exactReleaseContext,
+          expectedCommit: currentHead,
+          expectedTree: "d".repeat(40),
+        },
+        releaseApi(currentHead, currentHead),
+      ),
+    ).rejects.toThrow("source tree differs");
+  });
+
+  it("keeps the live publish boundary explicit", () => {
     expect(packageJson.version).toBe("5.1.0");
-    expect(packageJson.scripts.prepublishOnly).toContain(
-      "bun run check:clean",
-    );
     expect(packageJson.scripts.prepublishOnly).toContain(
       "bun run check:release-live",
     );
-    expect(publishWorkflow).toContain(
-      "/orgs/CUNY-AI-Lab/packages/npm/cail-identity/versions",
+    expect(packageJson.scripts["check:release-live"]).toBe(
+      "bun scripts/check-release-authority.ts --live",
     );
-    expect(publishWorkflow).toContain(
-      'CAIL_REGISTRY_VERSIONS_FILE="$RUNNER_TEMP/cail-identity-package-versions.json"',
+    expect(packageJson.scripts["check:release-ref"]).toBe(
+      "bun scripts/check-release-ref.ts",
     );
-    expect(ciWorkflow).toContain(
-      "bun install --frozen-lockfile --ignore-scripts",
-    );
+    expect(releaseAuthorityScript).toContain("CAIL_REGISTRY_VERSIONS_FILE");
+    expect(publishWorkflow).toContain("bun run check:release-ref");
+    expect(publishWorkflow).toContain("GITHUB_SHA: ${{ github.sha }}");
+    expect(publishWorkflow).toContain("gh api --paginate");
+    expect(publishWorkflow).toContain("CAIL_REGISTRY_VERSIONS_FILE");
+    expect(publishWorkflow).toContain("bun run check:release-live");
     expect(publishWorkflow).toContain(
       "NPM_CONFIG_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
     );
@@ -66,16 +281,25 @@ describe("release version authority", () => {
     expect(publishWorkflow).toContain(
       "NPM_CONFIG_REGISTRY: https://npm.pkg.github.com",
     );
+    expect(ciWorkflow).toContain(
+      "bun install --frozen-lockfile --ignore-scripts",
+    );
+  });
+
+  it("documents the immutable README defect in the already-published artifact", () => {
+    expect(readme).toContain("immutable 5.1.0 artifact");
+    expect(readme).toContain("cannot be edited");
+    expect(readme).toContain("follow-up version");
   });
 
   it("uses Bun's token authority without writing checkout credentials", () => {
-    const npmrc = resolve(import.meta.dirname, "../.npmrc");
+    const npmrc = resolve(root, ".npmrc");
     expect(existsSync(npmrc)).toBe(false);
     const result = spawnSync(
       "bun",
       ["publish", "--dry-run", "--ignore-scripts"],
       {
-        cwd: resolve(import.meta.dirname, ".."),
+        cwd: root,
         encoding: "utf8",
         env: {
           ...process.env,
@@ -91,107 +315,5 @@ describe("release version authority", () => {
       "+ @cuny-ai-lab/cail-identity@5.1.0 (dry-run)",
     );
     expect(existsSync(npmrc)).toBe(false);
-  });
-
-  it("rejects forged local authority", () => {
-    expect(
-      isValidAuthority({
-        ...authority,
-        package: { ...authority.package, candidate_version: "5.0.0" },
-      }),
-    ).toBe(false);
-    expect(
-      isValidAuthority({
-        ...authority,
-        registry: {
-          ...authority.registry,
-          candidate_state: "not_published",
-          workflow_receipt: authority.registry.workflow_receipt,
-          candidate_state_scope: "current_registry_state",
-        },
-      }),
-    ).toBe(false);
-    expect(
-      isValidAuthority({
-        ...authority,
-        registry: {
-          ...authority.registry,
-          candidate_state: "published",
-          workflow_receipt: {
-            ...authority.registry.workflow_receipt,
-            commit: "forged",
-          },
-        },
-      }),
-    ).toBe(false);
-  });
-
-  it("records a bounded workflow receipt without claiming registry availability", () => {
-    expect(authority.registry.candidate_state).toBe("not_published");
-    expect(authority.registry.candidate_state_scope).toBe(
-      "last_registry_observation",
-    );
-    expect(authority.registry.workflow_receipt).toMatchObject({
-      source: "github-actions-publish-workflow",
-      claim: "workflow_completed_successfully_registry_unverified",
-      observed_at: "2026-08-01T18:40:58Z",
-      workflow_run_id: 30709375309,
-      workflow_job_id: 91394005405,
-      run_status: "completed",
-      run_conclusion: "success",
-      tag: "v5.1.0",
-      commit: "15f3c6b92c79ab13a9d84df1061d72fabe4ad5e9",
-      published_at: "2026-08-01T17:00:16Z",
-    });
-  });
-
-  it("requires a non-null plain receipt with the exact closed key set", () => {
-    const receipt = authority.registry.workflow_receipt;
-    const cases = [
-      ["missing", (() => {
-        const registry = { ...authority.registry };
-        delete registry.workflow_receipt;
-        return registry;
-      })()],
-      ["null", { ...authority.registry, workflow_receipt: null }],
-      ["array", { ...authority.registry, workflow_receipt: [] }],
-      ["extra", {
-        ...authority.registry,
-        workflow_receipt: { ...receipt, extra: true },
-      }],
-      ["mismatched", {
-        ...authority.registry,
-        workflow_receipt: { ...receipt, run_conclusion: "failure" },
-      }],
-    ] as const;
-    for (const [label, registry] of cases) {
-      const candidate = { ...authority, registry };
-      expect(() => isValidAuthority(candidate), label).not.toThrow();
-      expect(isValidAuthority(candidate), label).toBe(false);
-    }
-  });
-
-  it("requires the exact old registry identity and candidate absence", () => {
-    const live = [
-      {
-        id: 1066308573,
-        name: "5.0.0",
-        created_at: "2026-07-25T17:27:05Z",
-      },
-    ];
-    expect(isValidLiveVersions(live)).toBe(true);
-    expect(
-      isValidLiveVersions([
-        ...live,
-        {
-          id: 1,
-          name: "5.1.0",
-          created_at: "2026-07-25T18:00:00Z",
-        },
-      ]),
-    ).toBe(false);
-    expect(
-      isValidLiveVersions([{ ...live[0], id: 1066308574 }]),
-    ).toBe(false);
   });
 });

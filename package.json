@@ -40,6 +40,7 @@
     "check:package": "bun pm pack --dry-run --ignore-scripts",
     "check:release-authority": "bun scripts/check-release-authority.ts",
     "check:release-live": "bun scripts/check-release-authority.ts --live",
+    "check:release-ref": "bun scripts/check-release-ref.ts",
     "typecheck": "tsc -p tsconfig.build.json --noEmit && tsc -p tsconfig.test.json",
     "test": "vitest run",
     "test:lua": "luajit test/subject-derivation-v2.lua",

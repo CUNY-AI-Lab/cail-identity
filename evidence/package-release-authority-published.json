@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "package": {
+    "name": "@cuny-ai-lab/cail-identity",
+    "version": "5.1.0"
+  },
+  "behavior_authority": {
+    "commit": "949839868f5bdac6ceb936fd83fe298aff3ad60c",
+    "tree": "7d008404aefa2b7ad981b5747f8522fd162fb356",
+    "runtime_paths": [
+      "contract",
+      "src"
+    ],
+    "runtime_sha256": "2300e88d443a6badb87dc34b73bcb8f41fc3e53f740938357d1e490fb06ea93a"
+  },
+  "release": {
+    "tag": "v5.1.0",
+    "commit": "15f3c6b92c79ab13a9d84df1061d72fabe4ad5e9",
+    "tree": "12ae8a872fa713b04ed3adf8add5dd9779c8c6b4",
+    "release_id": 363577354,
+    "release_url": "https://github.com/CUNY-AI-Lab/cail-identity/releases/tag/v5.1.0",
+    "published_at": "2026-08-01T17:00:16Z",
+    "workflow_run_id": 30709375309,
+    "workflow_run_url": "https://github.com/CUNY-AI-Lab/cail-identity/actions/runs/30709375309",
+    "workflow_job_id": 91394005405,
+    "workflow_job_url": "https://github.com/CUNY-AI-Lab/cail-identity/actions/runs/30709375309/job/91394005405",
+    "run_status": "completed",
+    "run_conclusion": "success"
+  },
+  "registry": {
+    "url": "https://npm.pkg.github.com",
+    "api": "https://api.github.com/orgs/CUNY-AI-Lab/packages/npm/cail-identity/versions",
+    "package_id": 13479480,
+    "package_version_id": 1088911629,
+    "version": "5.1.0",
+    "state": "published",
+    "created_at": "2026-08-01T17:01:12Z",
+    "observed_at": "2026-08-06T20:45:16Z",
+    "tarball": "https://npm.pkg.github.com/download/@cuny-ai-lab/cail-identity/5.1.0/27675a38c797795d11c3e99b8f7d2e519731faf2",
+    "artifact_sha1": "27675a38c797795d11c3e99b8f7d2e519731faf2",
+    "integrity": "sha512-L4XnjVlefEctstO7OKCPnQV0yv/WQyIuowx6aBe1Tq603iANuDCTp16n5llwmVEOC2tRh1CDnRQuD06kJZASFQ==",
+    "artifact_bytes": 37721,
+    "artifact_sha256": "763563d717ad6816cf300eea5dda3c059e87794ee2bc4f731701d5be32200735",
+    "artifact_git_tree_sha256": "cf517d3873386014325b305f422d9c223cd73f03dd83bbe7f8525a281cad7420"
+  }
+}
