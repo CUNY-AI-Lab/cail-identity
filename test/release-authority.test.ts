@@ -35,6 +35,12 @@ const publishedAuthorityText = readFileSync(
 );
 const candidateAuthority = JSON.parse(
   readFileSync(
+    resolve(root, "evidence/package-release-authority-candidate-5.1.2.json"),
+    "utf8",
+  ),
+);
+const burnedCandidateAuthority = JSON.parse(
+  readFileSync(
     resolve(root, "evidence/package-release-authority-candidate-5.1.1.json"),
     "utf8",
   ),
@@ -62,7 +68,7 @@ const ciWorkflow = readFileSync(
 
 const reviewedBehaviorCommit = candidateAuthority.source.commit;
 const reviewedBehaviorTree = candidateAuthority.source.tree;
-const releaseHead = "fdc6adbdd2905c7253999ee47ad14a36a9cb94f2";
+const releaseHead = "a".repeat(40);
 const oldHead = "b".repeat(40);
 const runtimeSha256 = candidateAuthority.behavior_authority.runtime_sha256;
 const packagePayload = candidateAuthority.package_payload;
@@ -81,7 +87,7 @@ function releaseApi(
       { object: { sha: branchSha, type: "commit" } },
     ],
     [
-      "/repos/CUNY-AI-Lab/cail-identity/git/ref/tags/v5.1.1",
+      "/repos/CUNY-AI-Lab/cail-identity/git/ref/tags/v5.1.2",
       { object: { sha: tagSha, type: "commit" } },
     ],
   ]);
@@ -92,10 +98,10 @@ function releaseApi(
 }
 
 const exactReleaseContext = {
-  packageVersion: "5.1.1",
+  packageVersion: "5.1.2",
   repository: "CUNY-AI-Lab/cail-identity",
   refType: "tag",
-  refName: "v5.1.1",
+  refName: "v5.1.2",
   sha: releaseHead,
   expectedRuntimeSha256: runtimeSha256,
   actualRuntimeSha256: runtimeSha256,
@@ -110,10 +116,12 @@ describe("release version authority", () => {
     expect(isValidCandidateAuthority(candidateAuthority)).toBe(true);
     expect(isValidCandidateSource(candidateAuthority.source)).toBe(true);
     expect(historicalAuthority.package.candidate_version).toBe("5.1.0");
-    expect(candidateAuthority.package.candidate_version).toBe("5.1.1");
+    expect(candidateAuthority.package.candidate_version).toBe("5.1.2");
+    expect(burnedCandidateAuthority.package.candidate_version).toBe("5.1.1");
+    expect(burnedCandidateAuthority.source.tag).toBe("v5.1.1");
     expect(candidateAuthority.registry).not.toHaveProperty("workflow_receipt");
     expect(candidateAuthority.source).toEqual({
-      tag: "v5.1.1",
+      tag: "v5.1.2",
       commit: reviewedBehaviorCommit,
       tree: reviewedBehaviorTree,
     });
@@ -212,11 +220,11 @@ describe("release version authority", () => {
         [
           {
             id: 1088911629,
-            name: "5.1.1",
+            name: "5.1.2",
             created_at: "2026-08-07T16:37:20Z",
           },
         ],
-        "5.1.1",
+        "5.1.2",
       ),
     ).toBe(false);
     expect(
@@ -347,14 +355,14 @@ describe("release version authority", () => {
     ).rejects.toThrow("requires a tag ref");
     await expect(
       verifyReleaseRef(
-        { ...exactReleaseContext, refName: "v5.1.0" },
+        { ...exactReleaseContext, refName: "v5.1.1" },
         releaseApi(releaseHead, releaseHead),
       ),
     ).rejects.toThrow("does not match package version");
   });
 
   it("keeps the live publish boundary explicit", () => {
-    expect(packageJson.version).toBe("5.1.1");
+    expect(packageJson.version).toBe("5.1.2");
     expect(packageJson.scripts.prepublishOnly).toContain(
       "bun run check:release-live",
     );
@@ -366,6 +374,9 @@ describe("release version authority", () => {
     );
     expect(releaseAuthorityScript).toContain("CAIL_REGISTRY_VERSIONS_FILE");
     expect(releaseRefScript).toContain(
+      "evidence/package-release-authority-candidate-5.1.2.json",
+    );
+    expect(releaseRefScript).not.toContain(
       "evidence/package-release-authority-candidate-5.1.1.json",
     );
     expect(releaseRefScript).not.toContain(
@@ -394,6 +405,8 @@ describe("release version authority", () => {
     expect(readme).toContain("immutable 5.1.0 artifact");
     expect(readme).toContain("cannot be edited");
     expect(readme).toContain("follow-up version");
+    expect(readme).toContain("v5.1.1 GitHub release name was then burned");
+    expect(readme).toContain("current candidate is v5.1.2");
   });
 
   it("uses Bun's token authority without writing checkout credentials", () => {
@@ -416,7 +429,7 @@ describe("release version authority", () => {
     const output = (result.stdout ?? "") + (result.stderr ?? "");
     expect(result.status).toBe(0);
     expect(output).toContain(
-      "+ @cuny-ai-lab/cail-identity@5.1.1 (dry-run)",
+      "+ @cuny-ai-lab/cail-identity@5.1.2 (dry-run)",
     );
     expect(existsSync(npmrc)).toBe(false);
   });
