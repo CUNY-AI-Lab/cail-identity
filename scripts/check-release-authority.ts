@@ -15,10 +15,15 @@ const publishedAuthorityPath = resolve(
   root,
   "evidence/package-release-authority-published.json",
 );
+const candidateAuthorityPath = resolve(
+  root,
+  "evidence/package-release-authority-candidate-5.1.1.json",
+);
 
 const packageName = "@cuny-ai-lab/cail-identity";
 const historicalCandidateVersion = "5.1.0";
 const publishedVersion = "5.1.0";
+const candidateVersion = "5.1.1";
 const historicalRuntimeSha256 =
   "2300e88d443a6badb87dc34b73bcb8f41fc3e53f740938357d1e490fb06ea93a";
 const publishedRuntimeSha256 =
@@ -48,6 +53,12 @@ const publishedArtifact = {
     "763563d717ad6816cf300eea5dda3c059e87794ee2bc4f731701d5be32200735",
   artifact_git_tree_sha256:
     "cf517d3873386014325b305f422d9c223cd73f03dd83bbe7f8525a281cad7420",
+} as const;
+const candidateBehavior = {
+  commit: "0d5b91846327661e8a630e86d3bc442b60f97224",
+  tree: "75fd5bc745a084bd48d3afc66a1bc14f7795fc17",
+  runtimeSha256:
+    "120e9cd9002b1fa6d9f9a61b07ffbabef8d17159bb36862849b1b51d8ca603a7",
 } as const;
 
 type UnknownRecord = Record<string, unknown>;
@@ -213,6 +224,67 @@ export function isValidHistoricalAuthority(value: unknown): boolean {
         published_at: publishedAt,
       },
     ),
+  );
+}
+
+/** Candidate authority has no release or workflow receipt before publication. */
+export function isValidCandidateAuthority(value: unknown): boolean {
+  const expectedVersions = [
+    ["5.1.0", 1088911629, "2026-08-01T17:01:12Z"],
+    ["5.0.0", 1066308573, "2026-07-25T17:27:05Z"],
+    ["4.4.0", 1046174164, "2026-07-19T23:30:37Z"],
+    ["4.3.0", 1046156313, "2026-07-19T23:09:25Z"],
+    ["4.2.0", 1046114943, "2026-07-19T22:33:36Z"],
+    ["4.1.0", 1046058154, "2026-07-19T21:51:19Z"],
+    ["4.0.0", 1045860997, "2026-07-19T19:27:43Z"],
+  ] as const;
+  if (
+    !hasExactKeys(value, [
+      "schema_version",
+      "package",
+      "behavior_authority",
+      "registry",
+    ]) ||
+    value.schema_version !== 1 ||
+    !hasExactKeys(value.package, ["name", "candidate_version"]) ||
+    value.package.name !== packageName ||
+    value.package.candidate_version !== candidateVersion ||
+    !hasExactKeys(value.behavior_authority, [
+      "commit",
+      "tree",
+      "runtime_paths",
+      "runtime_sha256",
+    ]) ||
+    value.behavior_authority.commit !== candidateBehavior.commit ||
+    value.behavior_authority.tree !== candidateBehavior.tree ||
+    !runtimePaths(value.behavior_authority.runtime_paths) ||
+    value.behavior_authority.runtime_sha256 !== candidateBehavior.runtimeSha256 ||
+    !hasExactKeys(value.registry, [
+      "url",
+      "api",
+      "observed_at",
+      "published_versions",
+      "candidate_state",
+      "candidate_state_scope",
+    ]) ||
+    value.registry.url !== "https://npm.pkg.github.com" ||
+    value.registry.api !==
+      "https://api.github.com/orgs/CUNY-AI-Lab/packages/npm/cail-identity/versions" ||
+    value.registry.observed_at !== "2026-08-07T14:25:33Z" ||
+    value.registry.candidate_state !== "not_published" ||
+    value.registry.candidate_state_scope !== "last_registry_observation" ||
+    !Array.isArray(value.registry.published_versions) ||
+    value.registry.published_versions.length !== expectedVersions.length
+  ) {
+    return false;
+  }
+  const versions = value.registry.published_versions;
+  return expectedVersions.every(([version, id, publishedAt], index) =>
+    validHistoricalVersion(versions[index], {
+      version,
+      package_version_id: id,
+      published_at: publishedAt,
+    }),
   );
 }
 
@@ -426,15 +498,19 @@ function main(): void {
   const publishedAuthority = JSON.parse(
     readFileSync(publishedAuthorityPath, "utf8"),
   ) as unknown;
+  const candidateAuthority = JSON.parse(
+    readFileSync(candidateAuthorityPath, "utf8"),
+  ) as unknown;
   const packageJson = JSON.parse(
     readFileSync(resolve(root, "package.json"), "utf8"),
   ) as { name?: unknown; version?: unknown };
   if (
     !isValidHistoricalAuthority(historicalAuthority) ||
     !isValidPublishedAuthority(publishedAuthority) ||
+    !isValidCandidateAuthority(candidateAuthority) ||
     packageJson.name !== packageName ||
-    packageJson.version !== publishedVersion ||
-    runtimeDigest() !== publishedRuntimeSha256
+    packageJson.version !== candidateVersion ||
+    runtimeDigest() !== candidateBehavior.runtimeSha256
   ) {
     throw new Error("cail-identity: local release authority is invalid");
   }

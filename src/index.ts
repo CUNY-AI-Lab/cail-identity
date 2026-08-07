@@ -750,7 +750,11 @@ export async function loadIdentityVerifierConfig(
     return { ok: false, reason: "timing_invalid" };
   }
 
-  freezeJsonValue(parsedJwks);
+  try {
+    freezeJsonValue(parsedJwks);
+  } catch {
+    return { ok: false, reason: "jwks_malformed" };
+  }
   const keysByKid = new Map<string, CryptoKey>();
   try {
     for (const { key, kid } of keyRecords) {

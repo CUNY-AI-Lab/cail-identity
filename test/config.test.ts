@@ -126,6 +126,16 @@ describe("loadIdentityVerifierConfig JWKS errors", () => {
     });
   });
 
+  it("owns deeply nested JWKS JSON instead of throwing during snapshot freeze", async () => {
+    const depth = 30_000;
+    const nested = `${"[".repeat(depth)}0${"]".repeat(depth)}`;
+    const jwks = `{"keys":[${JSON.stringify(key.publicJwk)}],"metadata":${nested}}`;
+    await expect(load({ jwks })).resolves.toEqual({
+      ok: false,
+      reason: "jwks_malformed",
+    });
+  });
+
   it("requires a nonempty distinct kid on every eligible public RS256 key", async () => {
     for (const jwks of [
       { keys: [{ ...key.publicJwk, kid: undefined }] },
