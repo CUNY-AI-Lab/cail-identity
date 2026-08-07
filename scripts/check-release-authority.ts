@@ -270,7 +270,7 @@ export function isValidCandidateAuthority(value: unknown): boolean {
     value.registry.url !== "https://npm.pkg.github.com" ||
     value.registry.api !==
       "https://api.github.com/orgs/CUNY-AI-Lab/packages/npm/cail-identity/versions" ||
-    typeof value.registry.observed_at !== "string" ||
+    value.registry.observed_at !== "2026-08-07T14:25:33Z" ||
     value.registry.candidate_state !== "not_published" ||
     value.registry.candidate_state_scope !== "last_registry_observation" ||
     !Array.isArray(value.registry.published_versions) ||
