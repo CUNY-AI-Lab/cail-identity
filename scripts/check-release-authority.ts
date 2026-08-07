@@ -1,9 +1,15 @@
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import {
+  existsSync,
+  mkdtempSync,
   readFileSync,
   readdirSync,
+  rmSync,
+  statSync,
 } from "node:fs";
-import { dirname, relative, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -60,8 +66,48 @@ const candidateBehavior = {
   runtimeSha256:
     "120e9cd9002b1fa6d9f9a61b07ffbabef8d17159bb36862849b1b51d8ca603a7",
 } as const;
+const candidateSource = {
+  tag: "v5.1.1",
+  commit: "0d5b91846327661e8a630e86d3bc442b60f97224",
+  tree: "75fd5bc745a084bd48d3afc66a1bc14f7795fc17",
+} as const;
+const candidatePackagePayload = {
+  tarball_sha256:
+    "6ebe02c1ea3ed0adc1347217cc56478097f8019a71cfc82aea5b5c23af0f7363",
+  tarball_bytes: 37718,
+  files: [
+    "LICENSE",
+    "README.md",
+    "contract/identity-jwt-claims-v1.json",
+    "contract/identity-keyring-v1.json",
+    "contract/principal-v1.json",
+    "contract/subject-derivation-v2.json",
+    "contract/subject-derivation-v2.lua",
+    "dist/index.d.ts",
+    "dist/index.d.ts.map",
+    "dist/index.js",
+    "dist/testing.d.ts",
+    "dist/testing.d.ts.map",
+    "dist/testing.js",
+    "package.json",
+    "src/index.ts",
+    "src/testing.ts",
+  ],
+} as const;
 
 type UnknownRecord = Record<string, unknown>;
+
+export type CandidateSource = {
+  tag: string;
+  commit: string;
+  tree: string;
+};
+
+export type PackagePayload = {
+  tarball_sha256: string;
+  tarball_bytes: number;
+  files: readonly string[];
+};
 
 type RegistryVersion = {
   id?: unknown;
@@ -227,7 +273,7 @@ export function isValidHistoricalAuthority(value: unknown): boolean {
   );
 }
 
-/** Candidate authority has no release or workflow receipt before publication. */
+/** Candidate authority has source identity but no publication workflow receipt. */
 export function isValidCandidateAuthority(value: unknown): boolean {
   const expectedVersions = [
     ["5.1.0", 1088911629, "2026-08-01T17:01:12Z"],
@@ -243,6 +289,8 @@ export function isValidCandidateAuthority(value: unknown): boolean {
       "schema_version",
       "package",
       "behavior_authority",
+      "source",
+      "package_payload",
       "registry",
     ]) ||
     value.schema_version !== 1 ||
@@ -259,6 +307,8 @@ export function isValidCandidateAuthority(value: unknown): boolean {
     value.behavior_authority.tree !== candidateBehavior.tree ||
     !runtimePaths(value.behavior_authority.runtime_paths) ||
     value.behavior_authority.runtime_sha256 !== candidateBehavior.runtimeSha256 ||
+    !isValidCandidateSource(value.source) ||
+    !isValidCandidatePackagePayload(value.package_payload) ||
     !hasExactKeys(value.registry, [
       "url",
       "api",
@@ -286,6 +336,100 @@ export function isValidCandidateAuthority(value: unknown): boolean {
       published_at: publishedAt,
     }),
   );
+}
+
+export function isValidCandidateSource(
+  value: unknown,
+): value is CandidateSource {
+  return (
+    hasExactKeys(value, ["tag", "commit", "tree"]) &&
+    value.tag === candidateSource.tag &&
+    value.commit === candidateSource.commit &&
+    value.tree === candidateSource.tree
+  );
+}
+
+function validPackagePayloadShape(value: unknown): value is PackagePayload {
+  if (
+    !hasExactKeys(value, ["tarball_sha256", "tarball_bytes", "files"]) ||
+    typeof value.tarball_sha256 !== "string" ||
+    !/^[0-9a-f]{64}$/u.test(value.tarball_sha256) ||
+    typeof value.tarball_bytes !== "number" ||
+    !Number.isSafeInteger(value.tarball_bytes) ||
+    value.tarball_bytes <= 0 ||
+    !Array.isArray(value.files) ||
+    value.files.length === 0
+  ) {
+    return false;
+  }
+  const files = value.files;
+  for (let index = 0; index < files.length; index += 1) {
+    if (
+      !Object.prototype.hasOwnProperty.call(files, index) ||
+      typeof files[index] !== "string" ||
+      files[index].length === 0 ||
+      (index > 0 && files[index - 1] >= files[index])
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function isValidCandidatePackagePayload(
+  value: unknown,
+): value is PackagePayload {
+  return (
+    validPackagePayloadShape(value) &&
+    value.tarball_sha256 === candidatePackagePayload.tarball_sha256 &&
+    value.tarball_bytes === candidatePackagePayload.tarball_bytes &&
+    value.files.length === candidatePackagePayload.files.length &&
+    value.files.every(
+      (file, index) => file === candidatePackagePayload.files[index],
+    )
+  );
+}
+
+/** Packs the exact published file allowlist without running package scripts. */
+export function packagePayloadIdentity(): PackagePayload {
+  const temporaryDirectory = mkdtempSync(join(tmpdir(), "cail-identity-pack-"));
+  const archivePath = join(temporaryDirectory, "package.tgz");
+  try {
+    const packed = spawnSync(
+      "bun",
+      ["pm", "pack", "--ignore-scripts", "--filename", archivePath, "--quiet"],
+      { cwd: root, encoding: "utf8" },
+    );
+    if (packed.status !== 0 || !existsSync(archivePath)) {
+      throw new Error("cail-identity: unable to pack the candidate package");
+    }
+    const listing = spawnSync(
+      "tar",
+      ["-tzf", archivePath],
+      { encoding: "utf8" },
+    );
+    if (listing.status !== 0 || typeof listing.stdout !== "string") {
+      throw new Error("cail-identity: unable to inspect the candidate package");
+    }
+    const files = listing.stdout
+      .split(/\r?\n/u)
+      .filter((entry) => entry.length > 0)
+      .map((entry) => {
+        if (!entry.startsWith("package/") || entry.endsWith("/")) {
+          throw new Error("cail-identity: package archive contains an invalid path");
+        }
+        return entry.slice("package/".length);
+      })
+      .sort();
+    const archive = readFileSync(archivePath);
+    return {
+      tarball_sha256: createHash("sha256").update(archive).digest("hex"),
+      tarball_bytes: statSync(archivePath).size,
+      files,
+    };
+  } finally {
+    rmSync(temporaryDirectory, { recursive: true, force: true });
+  }
 }
 
 export function isValidPublishedSourceTag(value: unknown): boolean {
@@ -510,7 +654,8 @@ function main(): void {
     !isValidCandidateAuthority(candidateAuthority) ||
     packageJson.name !== packageName ||
     packageJson.version !== candidateVersion ||
-    runtimeDigest() !== candidateBehavior.runtimeSha256
+    runtimeDigest() !== candidateBehavior.runtimeSha256 ||
+    !isValidCandidatePackagePayload(packagePayloadIdentity())
   ) {
     throw new Error("cail-identity: local release authority is invalid");
   }

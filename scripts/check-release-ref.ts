@@ -1,6 +1,14 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  isValidCandidateAuthority,
+  isValidCandidatePackagePayload,
+  packagePayloadIdentity,
+  runtimeDigest,
+  type CandidateSource,
+  type PackagePayload,
+} from "./check-release-authority.js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const githubApiVersion = "2026-03-10";
@@ -29,8 +37,10 @@ export type ReleaseRefContext = {
   refType: string | undefined;
   refName: string | undefined;
   sha: string | undefined;
-  expectedCommit?: string;
-  expectedTree?: string;
+  expectedRuntimeSha256: string;
+  actualRuntimeSha256: string;
+  expectedPackagePayload: PackagePayload;
+  actualPackagePayload: PackagePayload;
 };
 
 export type GithubJson = (path: string) => Promise<unknown>;
@@ -49,6 +59,13 @@ function object(value: unknown, label: string): Record<string, unknown> {
 function sha(value: unknown, label: string): string {
   if (typeof value !== "string" || !/^[0-9a-f]{40}$/iu.test(value)) {
     fail(`GitHub returned an invalid ${label} SHA.`);
+  }
+  return value.toLowerCase();
+}
+
+function digest(value: unknown, label: string): string {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/iu.test(value)) {
+    fail(`the candidate authority has an invalid ${label} digest.`);
   }
   return value.toLowerCase();
 }
@@ -117,6 +134,23 @@ export async function verifyReleaseRef(
       `release tag ${String(context.refName)} does not match package version ${context.packageVersion}.`,
     );
   }
+  const expectedRuntimeSha256 = digest(
+    context.expectedRuntimeSha256,
+    "runtime",
+  );
+  const actualRuntimeSha256 = digest(
+    context.actualRuntimeSha256,
+    "runtime",
+  );
+  if (actualRuntimeSha256 !== expectedRuntimeSha256) {
+    fail("the release runtime source differs from the candidate behavior authority.");
+  }
+  if (!isValidCandidatePackagePayload(context.expectedPackagePayload)) {
+    fail("the candidate package payload authority is invalid.");
+  }
+  if (!isValidCandidatePackagePayload(context.actualPackagePayload)) {
+    fail("the packed package payload differs from the candidate authority.");
+  }
   const workflowSha = sha(context.sha, "GITHUB_SHA");
   if (!/^[^/]+\/[^/]+$/u.test(context.repository)) {
     fail("GITHUB_REPOSITORY is missing or malformed.");
@@ -153,24 +187,6 @@ export async function verifyReleaseRef(
   );
   if (workflowSha !== tagSha) {
     fail("GITHUB_SHA is not the commit named by the release tag.");
-  }
-  if (context.expectedCommit !== undefined) {
-    const expectedCommit = sha(context.expectedCommit, "published source");
-    if (workflowSha !== expectedCommit) {
-      fail("GITHUB_SHA is not the recorded published source commit.");
-    }
-  }
-  if (context.expectedTree !== undefined) {
-    const commit = object(
-      await getJson(`${repositoryPath}/git/commits/${workflowSha}`),
-      "release commit",
-    );
-    const tree = object(commit.tree, "release commit tree");
-    const treeSha = sha(tree.sha, "release source tree");
-    const expectedTree = sha(context.expectedTree, "published source tree");
-    if (treeSha !== expectedTree) {
-      fail("the release tag source tree differs from the recorded authority.");
-    }
   }
   if (workflowSha !== branchSha) {
     fail("the release tag is not the live default-branch head.");
@@ -212,18 +228,27 @@ async function main(): Promise<void> {
   if (typeof packageJson.version !== "string" || packageJson.version.length === 0) {
     fail("package.json has no release version.");
   }
-  const publishedAuthority = JSON.parse(
+  const candidateAuthority = JSON.parse(
     readFileSync(
-      resolve(root, "evidence/package-release-authority-published.json"),
+      resolve(root, "evidence/package-release-authority-candidate-5.1.1.json"),
       "utf8",
     ),
-  ) as { release?: { commit?: unknown; tree?: unknown } };
-  if (
-    typeof publishedAuthority.release?.commit !== "string" ||
-    typeof publishedAuthority.release.tree !== "string"
-  ) {
-    fail("published source authority is missing its commit or tree.");
+  ) as unknown;
+  if (!isValidCandidateAuthority(candidateAuthority)) {
+    fail("candidate source authority is invalid.");
   }
+  const source = (candidateAuthority as {
+    source: CandidateSource;
+    behavior_authority: { runtime_sha256: string };
+    package_payload: PackagePayload;
+  }).source;
+  if (source.tag !== `v${packageJson.version}`) {
+    fail("candidate source authority tag does not match package version.");
+  }
+  const authority = candidateAuthority as {
+    behavior_authority: { runtime_sha256: string };
+    package_payload: PackagePayload;
+  };
   const token = process.env.GH_TOKEN;
   if (!token) fail("GH_TOKEN is required for the live GitHub ref check.");
   await verifyReleaseRef(
@@ -233,8 +258,10 @@ async function main(): Promise<void> {
       refType: process.env.GITHUB_REF_TYPE,
       refName: process.env.GITHUB_REF_NAME,
       sha: process.env.GITHUB_SHA,
-      expectedCommit: publishedAuthority.release.commit,
-      expectedTree: publishedAuthority.release.tree,
+      expectedRuntimeSha256: authority.behavior_authority.runtime_sha256,
+      actualRuntimeSha256: runtimeDigest(),
+      expectedPackagePayload: authority.package_payload,
+      actualPackagePayload: packagePayloadIdentity(),
     },
     (path) => githubJson(path, token),
   );
