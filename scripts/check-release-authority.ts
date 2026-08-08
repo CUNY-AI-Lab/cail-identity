@@ -61,20 +61,20 @@ const publishedArtifact = {
     "cf517d3873386014325b305f422d9c223cd73f03dd83bbe7f8525a281cad7420",
 } as const;
 const candidateBehavior = {
-  commit: "2380f84b62902b6168c1a1894bce7ffef4daa7ac",
-  tree: "6ce442179b22d8d65dfe99fb58a7b309c611f3f9",
+  commit: "a407b932112c11a77cf3a7e26e7345b1b566ac17",
+  tree: "88e69c84bab95dc14abeab6196cae6fc3432812d",
   runtimeSha256:
-    "926cf26143e893c94ea0c2c5f20d8b1a3ce44016a6793d73ea1c678117ed27d9",
+    "932dafab753fbae38c8cc37b76592835d880a764b98d51c602b9a0adc6323830",
 } as const;
 const candidateSource = {
   tag: "v6.0.0",
-  commit: "2380f84b62902b6168c1a1894bce7ffef4daa7ac",
-  tree: "6ce442179b22d8d65dfe99fb58a7b309c611f3f9",
+  commit: "a407b932112c11a77cf3a7e26e7345b1b566ac17",
+  tree: "88e69c84bab95dc14abeab6196cae6fc3432812d",
 } as const;
 const candidatePackagePayload = {
   tarball_sha256:
-    "d3fa53fc440d5c31efefda03a488d551193dd93e21eee871dbd428faeb71cd97",
-  tarball_bytes: 42057,
+    "7b93de458579e9a88b2789835dceae9a4761f3fe7b6e7030fc0aeb60bd05cc8a",
+  tarball_bytes: 42065,
   files: [
     "LICENSE",
     "README.md",

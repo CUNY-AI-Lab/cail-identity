@@ -160,7 +160,7 @@ describe("release version authority", () => {
 
   it("derives the current runtime and validates source/tag and artifact identity", () => {
     expect(runtimeDigest()).toBe(
-      "926cf26143e893c94ea0c2c5f20d8b1a3ce44016a6793d73ea1c678117ed27d9",
+      "932dafab753fbae38c8cc37b76592835d880a764b98d51c602b9a0adc6323830",
     );
     expect(isValidPublishedSourceTag(publishedAuthority.release)).toBe(true);
     expect(
