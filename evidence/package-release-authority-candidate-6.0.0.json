@@ -2,25 +2,25 @@
   "schema_version": 1,
   "package": {
     "name": "@cuny-ai-lab/cail-identity",
-    "candidate_version": "5.1.2"
+    "candidate_version": "6.0.0"
   },
   "behavior_authority": {
-    "commit": "0d5b91846327661e8a630e86d3bc442b60f97224",
-    "tree": "75fd5bc745a084bd48d3afc66a1bc14f7795fc17",
+    "commit": "2380f84b62902b6168c1a1894bce7ffef4daa7ac",
+    "tree": "6ce442179b22d8d65dfe99fb58a7b309c611f3f9",
     "runtime_paths": [
       "contract",
       "src"
     ],
-    "runtime_sha256": "120e9cd9002b1fa6d9f9a61b07ffbabef8d17159bb36862849b1b51d8ca603a7"
+    "runtime_sha256": "926cf26143e893c94ea0c2c5f20d8b1a3ce44016a6793d73ea1c678117ed27d9"
   },
   "source": {
-    "tag": "v5.1.2",
-    "commit": "0d5b91846327661e8a630e86d3bc442b60f97224",
-    "tree": "75fd5bc745a084bd48d3afc66a1bc14f7795fc17"
+    "tag": "v6.0.0",
+    "commit": "2380f84b62902b6168c1a1894bce7ffef4daa7ac",
+    "tree": "6ce442179b22d8d65dfe99fb58a7b309c611f3f9"
   },
   "package_payload": {
-    "tarball_sha256": "6f03e2d03fcce62e7343c6de052a2988b9ed0f7604be14f06859bc23442d0b4a",
-    "tarball_bytes": 37802,
+    "tarball_sha256": "d3fa53fc440d5c31efefda03a488d551193dd93e21eee871dbd428faeb71cd97",
+    "tarball_bytes": 42057,
     "files": [
       "LICENSE",
       "README.md",

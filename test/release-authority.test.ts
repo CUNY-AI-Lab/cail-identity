@@ -35,7 +35,7 @@ const publishedAuthorityText = readFileSync(
 );
 const candidateAuthority = JSON.parse(
   readFileSync(
-    resolve(root, "evidence/package-release-authority-candidate-5.1.2.json"),
+    resolve(root, "evidence/package-release-authority-candidate-6.0.0.json"),
     "utf8",
   ),
 );
@@ -87,7 +87,7 @@ function releaseApi(
       { object: { sha: branchSha, type: "commit" } },
     ],
     [
-      "/repos/CUNY-AI-Lab/cail-identity/git/ref/tags/v5.1.2",
+      "/repos/CUNY-AI-Lab/cail-identity/git/ref/tags/v6.0.0",
       { object: { sha: tagSha, type: "commit" } },
     ],
   ]);
@@ -98,10 +98,10 @@ function releaseApi(
 }
 
 const exactReleaseContext = {
-  packageVersion: "5.1.2",
+  packageVersion: "6.0.0",
   repository: "CUNY-AI-Lab/cail-identity",
   refType: "tag",
-  refName: "v5.1.2",
+  refName: "v6.0.0",
   sha: releaseHead,
   expectedRuntimeSha256: runtimeSha256,
   actualRuntimeSha256: runtimeSha256,
@@ -116,12 +116,12 @@ describe("release version authority", () => {
     expect(isValidCandidateAuthority(candidateAuthority)).toBe(true);
     expect(isValidCandidateSource(candidateAuthority.source)).toBe(true);
     expect(historicalAuthority.package.candidate_version).toBe("5.1.0");
-    expect(candidateAuthority.package.candidate_version).toBe("5.1.2");
+    expect(candidateAuthority.package.candidate_version).toBe("6.0.0");
     expect(burnedCandidateAuthority.package.candidate_version).toBe("5.1.1");
     expect(burnedCandidateAuthority.source.tag).toBe("v5.1.1");
     expect(candidateAuthority.registry).not.toHaveProperty("workflow_receipt");
     expect(candidateAuthority.source).toEqual({
-      tag: "v5.1.2",
+      tag: "v6.0.0",
       commit: reviewedBehaviorCommit,
       tree: reviewedBehaviorTree,
     });
@@ -160,7 +160,7 @@ describe("release version authority", () => {
 
   it("derives the current runtime and validates source/tag and artifact identity", () => {
     expect(runtimeDigest()).toBe(
-      "120e9cd9002b1fa6d9f9a61b07ffbabef8d17159bb36862849b1b51d8ca603a7",
+      "926cf26143e893c94ea0c2c5f20d8b1a3ce44016a6793d73ea1c678117ed27d9",
     );
     expect(isValidPublishedSourceTag(publishedAuthority.release)).toBe(true);
     expect(
@@ -220,11 +220,11 @@ describe("release version authority", () => {
         [
           {
             id: 1088911629,
-            name: "5.1.2",
+            name: "6.0.0",
             created_at: "2026-08-07T16:37:20Z",
           },
         ],
-        "5.1.2",
+        "6.0.0",
       ),
     ).toBe(false);
     expect(
@@ -362,7 +362,7 @@ describe("release version authority", () => {
   });
 
   it("keeps the live publish boundary explicit", () => {
-    expect(packageJson.version).toBe("5.1.2");
+    expect(packageJson.version).toBe("6.0.0");
     expect(packageJson.scripts.prepublishOnly).toContain(
       "bun run check:release-live",
     );
@@ -374,7 +374,7 @@ describe("release version authority", () => {
     );
     expect(releaseAuthorityScript).toContain("CAIL_REGISTRY_VERSIONS_FILE");
     expect(releaseRefScript).toContain(
-      "evidence/package-release-authority-candidate-5.1.2.json",
+      "evidence/package-release-authority-candidate-6.0.0.json",
     );
     expect(releaseRefScript).not.toContain(
       "evidence/package-release-authority-candidate-5.1.1.json",
@@ -467,7 +467,7 @@ describe("release version authority", () => {
     expect(readme).toContain("cannot be edited");
     expect(readme).toContain("follow-up version");
     expect(readme).toContain("v5.1.1 GitHub release name was then burned");
-    expect(readme).toContain("current candidate is v5.1.2");
+    expect(readme).toContain("current candidate is v6.0.0");
   });
 
   it("uses Bun's token authority without writing checkout credentials", () => {
@@ -490,7 +490,7 @@ describe("release version authority", () => {
     const output = (result.stdout ?? "") + (result.stderr ?? "");
     expect(result.status).toBe(0);
     expect(output).toContain(
-      "+ @cuny-ai-lab/cail-identity@5.1.2 (dry-run)",
+      "+ @cuny-ai-lab/cail-identity@6.0.0 (dry-run)",
     );
     expect(existsSync(npmrc)).toBe(false);
   });
