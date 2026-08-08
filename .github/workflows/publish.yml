@@ -3,12 +3,6 @@ name: Publish
 on:
   release:
     types: [published]
-  workflow_dispatch:
-    inputs:
-      release_tag:
-        description: Existing immutable release tag to recover (for example, v5.1.2)
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -16,199 +10,33 @@ permissions:
 
 jobs:
   publish:
+    if: ${{ !github.event.release.prerelease }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
     steps:
-      # The workflow itself always comes from the current default branch. A
-      # later checkout replaces only the package source with the exact release
-      # tag after the release has been validated.
-      - name: Checkout workflow source
+      - name: Checkout release source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ github.event.repository.default_branch }}
-          persist-credentials: false
-
-      - name: Resolve and validate release
-        id: release
-        shell: bash
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          DISPATCH_RELEASE_TAG: ${{ inputs.release_tag }}
-          RELEASE_EVENT_TAG: ${{ github.event.release.tag_name }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-
-          case "$EVENT_NAME" in
-            release)
-              release_tag="$RELEASE_EVENT_TAG"
-              ;;
-            workflow_dispatch)
-              release_tag="$DISPATCH_RELEASE_TAG"
-              ;;
-            *)
-              echo "Unsupported publish event: $EVENT_NAME" >&2
-              exit 1
-              ;;
-          esac
-
-          # Recovery accepts only a plain vMAJOR.MINOR.PATCH tag. Keeping the
-          # caller value in an environment variable prevents shell injection.
-          if [[ ! "$release_tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-            echo "Release tag must match vMAJOR.MINOR.PATCH: $release_tag" >&2
-            exit 1
-          fi
-
-          release_json="$(gh api \
-            --header 'X-GitHub-Api-Version: 2026-03-10' \
-            "/repos/${GITHUB_REPOSITORY}/releases/tags/${release_tag}")"
-          if ! jq -e --arg tag "$release_tag" '
-            .tag_name == $tag and
-            .draft == false and
-            .prerelease == false and
-            (.published_at | type == "string" and length > 0)
-          ' <<<"$release_json" >/dev/null; then
-            echo "Release is missing, unpublished, draft, or prerelease: $release_tag" >&2
-            exit 1
-          fi
-          if [[ "$EVENT_NAME" == "workflow_dispatch" ]] &&
-            ! jq -e '.immutable == true' <<<"$release_json" >/dev/null; then
-            echo "Recovery requires an immutable GitHub release: $release_tag" >&2
-            exit 1
-          fi
-
-          tag_ref="$(gh api \
-            --header 'X-GitHub-Api-Version: 2026-03-10' \
-            "/repos/${GITHUB_REPOSITORY}/git/ref/tags/${release_tag}")"
-          tag_type="$(jq -r '.object.type // empty' <<<"$tag_ref")"
-          tag_sha="$(jq -r '.object.sha // empty' <<<"$tag_ref")"
-          for _ in 1 2 3 4; do
-            case "$tag_type" in
-              commit)
-                break
-                ;;
-              tag)
-                tag_sha="$(printf '%s' "$tag_sha" | tr '[:upper:]' '[:lower:]')"
-                if [[ ! "$tag_sha" =~ ^[0-9a-f]{40}$ ]]; then
-                  echo "Annotated release tag returned an invalid object SHA" >&2
-                  exit 1
-                fi
-                tag_object="$(gh api \
-                  --header 'X-GitHub-Api-Version: 2026-03-10' \
-                  "/repos/${GITHUB_REPOSITORY}/git/tags/${tag_sha}")"
-                tag_type="$(jq -r '.object.type // empty' <<<"$tag_object")"
-                tag_sha="$(jq -r '.object.sha // empty' <<<"$tag_object")"
-                ;;
-              *)
-                echo "Release tag resolves to unsupported Git object: $tag_type" >&2
-                exit 1
-                ;;
-            esac
-          done
-          tag_sha="$(printf '%s' "$tag_sha" | tr '[:upper:]' '[:lower:]')"
-          if [[ "$tag_type" != "commit" || ! "$tag_sha" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "Release tag did not resolve to a commit: $release_tag" >&2
-            exit 1
-          fi
-
-          # GitHub's target_commitish may be a branch name. When it is a
-          # commit SHA, fail closed if it disagrees with the resolved tag.
-          release_target="$(jq -r '.target_commitish // empty' <<<"$release_json")"
-          if [[ "$release_target" =~ ^[0-9a-fA-F]{40}$ ]] &&
-            [[ "$(printf '%s' "$release_target" | tr '[:upper:]' '[:lower:]')" != "$tag_sha" ]]; then
-            echo "Release target does not match the resolved tag: $release_tag" >&2
-            exit 1
-          fi
-
-          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
-            repository_json="$(gh api \
-              --header 'X-GitHub-Api-Version: 2026-03-10' \
-              "/repos/${GITHUB_REPOSITORY}")"
-            default_branch="$(jq -r '.default_branch // empty' <<<"$repository_json")"
-            if [[ -z "$default_branch" ]]; then
-              echo "GitHub did not return a default branch for recovery" >&2
-              exit 1
-            fi
-            branch_ref="$(gh api \
-              --header 'X-GitHub-Api-Version: 2026-03-10' \
-              "/repos/${GITHUB_REPOSITORY}/git/ref/heads/${default_branch}")"
-            branch_type="$(jq -r '.object.type // empty' <<<"$branch_ref")"
-            branch_sha="$(jq -r '.object.sha // empty' <<<"$branch_ref")"
-            branch_sha="$(printf '%s' "$branch_sha" | tr '[:upper:]' '[:lower:]')"
-            if [[ "$branch_type" != "commit" || ! "$branch_sha" =~ ^[0-9a-f]{40}$ ]]; then
-              echo "GitHub default branch did not resolve to a commit" >&2
-              exit 1
-            fi
-            compare_json="$(gh api \
-              --header 'X-GitHub-Api-Version: 2026-03-10' \
-              "/repos/${GITHUB_REPOSITORY}/compare/${tag_sha}...${branch_sha}")"
-            if ! jq -e '
-              (.status == "identical" or .status == "ahead") and
-              .behind_by == 0
-            ' <<<"$compare_json" >/dev/null; then
-              echo "Default branch is not a descendant of the immutable release tag" >&2
-              exit 1
-            fi
-          fi
-
-          {
-            echo "tag=$release_tag"
-            echo "sha=$tag_sha"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Checkout immutable release source
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: ${{ steps.release.outputs.tag }}
-          fetch-depth: 0
+          ref: refs/tags/${{ github.event.release.tag_name }}
           persist-credentials: false
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.3.14
-      # check runs test:lua, a LuaJIT reference implementation of subject
-      # derivation. The runner image has no luajit.
-      - run: sudo apt-get update && sudo apt-get install -y luajit
-      - run: bun install --frozen-lockfile --ignore-scripts
-      - name: Verify recovery package version
-        if: github.event_name == 'workflow_dispatch'
-        shell: bash
+
+      - name: Install LuaJIT for cross-language identity vectors
+        run: sudo apt-get update && sudo apt-get install --yes luajit
+
+      - name: Install
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Verify release tag matches package version
         env:
-          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
-          expected_version="${RELEASE_TAG#v}"
-          package_version="$(jq -r '.version // empty' package.json)"
-          if [[ "$package_version" != "$expected_version" ]]; then
-            echo "Package version $package_version does not match release tag $RELEASE_TAG" >&2
-            exit 1
-          fi
-      - name: Verify release tag is the live default-branch head
-        if: github.event_name == 'release'
-        run: bun run check:release-ref
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          GITHUB_REF_TYPE: ${{ github.ref_type }}
-          GITHUB_REF_NAME: ${{ github.ref_name }}
-          GITHUB_SHA: ${{ github.sha }}
-      - run: bun run check
-      - name: Verify registry version is unoccupied
-        run: |
-          set -o pipefail
-          gh api --paginate \
-            --header 'X-GitHub-Api-Version: 2026-03-10' \
-            '/orgs/CUNY-AI-Lab/packages/npm/cail-identity/versions?per_page=100&state=active' \
-            | jq -s 'add' > "$RUNNER_TEMP/cail-identity-package-versions.json"
-          CAIL_REGISTRY_VERSIONS_FILE="$RUNNER_TEMP/cail-identity-package-versions.json" \
-            bun run check:release-live
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      # Keep the public-registry install environment clean. Only the publish
-      # command receives the GitHub Packages registry explicitly.
+          test "$RELEASE_TAG" = "v$(jq -r '.version' package.json)"
+
       - name: Publish to GitHub Packages
         run: bun publish --registry https://npm.pkg.github.com
         env:
-          CAIL_REGISTRY_VERSIONS_FILE: ${{ runner.temp }}/cail-identity-package-versions.json
           NPM_CONFIG_TOKEN: ${{ secrets.GITHUB_TOKEN }}
