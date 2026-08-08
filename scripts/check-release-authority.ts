@@ -73,8 +73,8 @@ const candidateSource = {
 } as const;
 const candidatePackagePayload = {
   tarball_sha256:
-    "7dcfb24a6bfcb81f7bc65eccee241842a7a47b447ffe4b82381969f72fa79e7a",
-  tarball_bytes: 42065,
+    "a785d719b9589e160e6a2d954654b0f0fa60a1edb464b0ca0b48b5901d515dbc",
+  tarball_bytes: 42077,
   files: [
     "LICENSE",
     "README.md",

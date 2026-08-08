@@ -52,7 +52,8 @@
     "jose": "6.2.3"
   },
   "overrides": {
-    "postcss": "8.5.25"
+    "postcss": "8.5.25",
+    "nanoid": "3.3.17"
   },
   "devDependencies": {
     "@types/node": "^20.17.6",
