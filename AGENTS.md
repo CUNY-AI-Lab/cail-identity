@@ -1,0 +1,12 @@
+# cail-identity
+
+- Owns stable CAIL subject derivation for trusted authentication boundaries and exact RS256 identity-JWT verification from supplied JWKS material.
+- `deriveCailSubject` and app-subject helpers accept trusted issuer/subject inputs; they never authenticate request data or headers.
+- Load verifier configuration first; only its immutable snapshot may reach `verifyIdentityJwt`.
+- Configuration failures are operator inputs; invalid tokens return `null` without exposing a reason or performing network access.
+- Verification requires the configured issuer and audience, an eligible public RSA key, RS256, registered claims, and a canonical subject.
+- Gateway access claims are returned only after audience-bound signature verification; keyring helpers parse transport shape and require separate gateway-leg verification before forwarding.
+- Callers own the authentication boundary, request-header handling, audience choice, JWKS loading/rotation, sessions, and token minting.
+- Do not add request-header identity, session or API-key authority, model routing, provider state, quota enforcement, or accounting behavior.
+
+Check with `bun run check`.
