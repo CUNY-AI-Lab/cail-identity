@@ -23,6 +23,7 @@
  * runtime dependency of this package).
  */
 import { type JSONWebKeySet } from "jose";
+import { type CailBudgetScope, type CailModelScope } from "./index.js";
 /**
  * Deterministic, structurally canonical CAIL test subject from a readable
  * seed: `cail-` + the first 32 lowercase hex characters of SHA-256(seed).
@@ -71,6 +72,12 @@ export interface MintTestIdentityJwtOptions {
     name?: string;
     /** Optional `entitlements` claim. */
     entitlements?: string[];
+    /**
+     * Typed access claims for a Gateway-audience identity leg. The helper does
+     * not infer or add these claims from `audience`; omit this option to mint a
+     * signed token that exercises the Gateway missing-claims rejection path.
+     */
+    gatewayAccess?: MintTestGatewayAccessOptions;
     /** `iss` claim override. Default: the issuer the kit was created with. */
     issuer?: string;
     /** Unix seconds used for `iat` (and the `exp` base). Default: now. */
@@ -91,6 +98,11 @@ export interface MintTestIdentityJwtOptions {
      * (alg tampering, wrong-key signatures) are intentionally out of scope.
      */
     claims?: Record<string, unknown>;
+}
+/** Test-only typed projection of the Gateway access claim pair. */
+export interface MintTestGatewayAccessOptions {
+    scopes: readonly CailModelScope[];
+    budgetScope: CailBudgetScope;
 }
 export interface TestIdentityIssuer {
     /** The key id present in both the JWKS and every minted token header. */

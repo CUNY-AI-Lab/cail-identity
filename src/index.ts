@@ -12,6 +12,8 @@
  *   - Invalid tokens fail closed to `null` without revealing a failure reason.
  *     Configuration is loaded separately and remains an owned operator error.
  *   - A verified token must contain the stable pseudonymous CAIL subject.
+ *   - Exact `cail:gateway` tokens must carry the closed model-scope and
+ *     namespaced budget-scope access claims; app-audience tokens ignore them.
  *   - Subject derivation is explicit and intended only for a trusted CUNY
  *     authentication boundary, never for user-controlled request data.
  */
@@ -25,7 +27,43 @@ export interface CailIdentity {
   email?: string;
   name?: string;
   entitlements: string[];
+  /** Signed Gateway model-access scopes; present only for `cail:gateway`. */
+  scopes?: CailModelScope[];
+  /** Signed Gateway accounting budget scope; present only for `cail:gateway`. */
+  budgetScope?: CailBudgetScope;
 }
+
+/** Model-access scopes the Gateway identity contract recognizes. */
+export type CailModelScope =
+  | "models:read"
+  | "models:invoke"
+  | "quota:read";
+
+/** Budget scopes allowed on a person-bound Gateway identity. */
+export type CailBudgetScope =
+  | "person"
+  | "classroom"
+  | "person-plus"
+  | "admin";
+
+/** Frozen vocabulary of model-access scopes accepted by Gateway tokens. */
+export const CAIL_MODEL_SCOPES = Object.freeze([
+  "models:read",
+  "models:invoke",
+  "quota:read",
+] as const);
+
+/** Frozen vocabulary of budget scopes accepted by Gateway tokens. */
+export const CAIL_BUDGET_SCOPES = Object.freeze([
+  "person",
+  "classroom",
+  "person-plus",
+  "admin",
+] as const);
+
+/** Collision-resistant private claim carrying the Gateway budget partition. */
+export const CAIL_BUDGET_SCOPE_CLAIM =
+  "https://ailab.gc.cuny.edu/claims/budget_scope";
 
 /** Stable pseudonymous identifier shared across CAIL applications. */
 export const CAIL_SUBJECT_PATTERN = /^cail-[0-9a-f]{32}$/;
@@ -460,6 +498,56 @@ function hasExactAudience(value: unknown, expected: string): boolean {
   return typeof value === "string" && value !== "" && value === expected;
 }
 
+const CAIL_MODEL_SCOPE_SET: ReadonlySet<string> = new Set(CAIL_MODEL_SCOPES);
+const CAIL_BUDGET_SCOPE_SET: ReadonlySet<string> = new Set(CAIL_BUDGET_SCOPES);
+
+interface GatewayAccessClaims {
+  scopes: CailModelScope[];
+  budgetScope: CailBudgetScope;
+}
+
+/**
+ * Parse the two signed access claims carried only by a Gateway-audience JWT.
+ *
+ * `scope` follows the OAuth space-delimited convention, but this package owns
+ * a closed vocabulary: every token must be known, nonempty, and unique. The
+ * raw string is intentionally not normalized, so duplicate or alternate
+ * whitespace spellings cannot become authority by accident.
+ */
+function snapshotGatewayAccessClaims(
+  payload: Record<string, unknown>,
+): GatewayAccessClaims | null {
+  const scope = ownProp(payload, "scope");
+  if (typeof scope !== "string" || scope === "") return null;
+
+  const scopeTokens = scope.split(" ");
+  if (
+    scopeTokens.length === 0 ||
+    scopeTokens.some(
+      (token) =>
+        token === "" ||
+        !/^[\x21\x23-\x5b\x5d-\x7e]+$/.test(token) ||
+        !CAIL_MODEL_SCOPE_SET.has(token),
+    ) ||
+    new Set(scopeTokens).size !== scopeTokens.length
+  ) {
+    return null;
+  }
+
+  const budgetScope = ownProp(payload, CAIL_BUDGET_SCOPE_CLAIM);
+  if (
+    typeof budgetScope !== "string" ||
+    !CAIL_BUDGET_SCOPE_SET.has(budgetScope)
+  ) {
+    return null;
+  }
+
+  return {
+    scopes: scopeTokens as CailModelScope[],
+    budgetScope: budgetScope as CailBudgetScope,
+  };
+}
+
 const PRIVATE_JWK_PARAMETERS = [
   "d",
   "p",
@@ -838,6 +926,12 @@ async function verifyIdentityJwtInternal(
   ) {
     return null;
   }
+  const gatewayAccess =
+    aud === CAIL_GATEWAY_AUDIENCE
+      ? snapshotGatewayAccessClaims(inspected.payload)
+      : null;
+  if (aud === CAIL_GATEWAY_AUDIENCE && gatewayAccess === null) return null;
+
   return {
     subject: sub,
     ...(typeof operationalSubject === "string"
@@ -848,6 +942,7 @@ async function verifyIdentityJwtInternal(
     entitlements: Array.isArray(entitlements)
       ? entitlements.filter((item): item is string => typeof item === "string")
       : [],
+    ...(gatewayAccess === null ? {} : gatewayAccess),
   };
 }
 

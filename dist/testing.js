@@ -23,7 +23,7 @@
  * runtime dependency of this package).
  */
 import { SignJWT, exportJWK, generateKeyPair } from "jose";
-import { CAIL_CANONICAL_ISSUER } from "./index.js";
+import { CAIL_BUDGET_SCOPE_CLAIM, CAIL_BUDGET_SCOPES, CAIL_CANONICAL_ISSUER, CAIL_MODEL_SCOPES, } from "./index.js";
 // ---------------------------------------------------------------------------
 // Deterministic canonical test subjects
 // ---------------------------------------------------------------------------
@@ -203,6 +203,21 @@ export async function createTestIdentityIssuer(options) {
                     Array.isArray(mint.claims))) {
                 throw new TypeError("mintIdentityJwt `claims` must be a plain object of claim overrides.");
             }
+            if (mint.gatewayAccess !== undefined) {
+                const access = mint.gatewayAccess;
+                if (typeof access !== "object" ||
+                    access === null ||
+                    Array.isArray(access) ||
+                    !Array.isArray(access.scopes) ||
+                    access.scopes.length === 0 ||
+                    access.scopes.some((scope) => typeof scope !== "string" ||
+                        !CAIL_MODEL_SCOPES.includes(scope)) ||
+                    new Set(access.scopes).size !== access.scopes.length ||
+                    typeof access.budgetScope !== "string" ||
+                    !CAIL_BUDGET_SCOPES.includes(access.budgetScope)) {
+                    throw new TypeError("mintIdentityJwt `gatewayAccess` must contain a nonempty unique model-scope subset and a known budget scope.");
+                }
+            }
             const now = mint.now ?? Math.floor(Date.now() / 1000);
             const payload = {
                 iss: mint.issuer ?? issuer,
@@ -217,6 +232,12 @@ export async function createTestIdentityIssuer(options) {
                 ...(mint.name !== undefined ? { name: mint.name } : {}),
                 ...(mint.entitlements !== undefined
                     ? { entitlements: mint.entitlements }
+                    : {}),
+                ...(mint.gatewayAccess !== undefined
+                    ? {
+                        scope: mint.gatewayAccess.scopes.join(" "),
+                        [CAIL_BUDGET_SCOPE_CLAIM]: mint.gatewayAccess.budgetScope,
+                    }
                     : {}),
                 ...(mint.authTime !== undefined ? { auth_time: mint.authTime } : {}),
                 ...(mint.notBefore !== undefined ? { nbf: mint.notBefore } : {}),

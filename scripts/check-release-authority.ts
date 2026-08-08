@@ -23,13 +23,13 @@ const publishedAuthorityPath = resolve(
 );
 const candidateAuthorityPath = resolve(
   root,
-  "evidence/package-release-authority-candidate-5.1.2.json",
+  "evidence/package-release-authority-candidate-5.2.0.json",
 );
 
 const packageName = "@cuny-ai-lab/cail-identity";
 const historicalCandidateVersion = "5.1.0";
 const publishedVersion = "5.1.0";
-const candidateVersion = "5.1.2";
+const candidateVersion = "5.2.0";
 const historicalRuntimeSha256 =
   "2300e88d443a6badb87dc34b73bcb8f41fc3e53f740938357d1e490fb06ea93a";
 const publishedRuntimeSha256 =
@@ -61,20 +61,20 @@ const publishedArtifact = {
     "cf517d3873386014325b305f422d9c223cd73f03dd83bbe7f8525a281cad7420",
 } as const;
 const candidateBehavior = {
-  commit: "0d5b91846327661e8a630e86d3bc442b60f97224",
-  tree: "75fd5bc745a084bd48d3afc66a1bc14f7795fc17",
+  commit: "a407b932112c11a77cf3a7e26e7345b1b566ac17",
+  tree: "88e69c84bab95dc14abeab6196cae6fc3432812d",
   runtimeSha256:
-    "120e9cd9002b1fa6d9f9a61b07ffbabef8d17159bb36862849b1b51d8ca603a7",
+    "932dafab753fbae38c8cc37b76592835d880a764b98d51c602b9a0adc6323830",
 } as const;
 const candidateSource = {
-  tag: "v5.1.2",
-  commit: "0d5b91846327661e8a630e86d3bc442b60f97224",
-  tree: "75fd5bc745a084bd48d3afc66a1bc14f7795fc17",
+  tag: "v5.2.0",
+  commit: "a407b932112c11a77cf3a7e26e7345b1b566ac17",
+  tree: "88e69c84bab95dc14abeab6196cae6fc3432812d",
 } as const;
 const candidatePackagePayload = {
   tarball_sha256:
-    "6f03e2d03fcce62e7343c6de052a2988b9ed0f7604be14f06859bc23442d0b4a",
-  tarball_bytes: 37802,
+    "a785d719b9589e160e6a2d954654b0f0fa60a1edb464b0ca0b48b5901d515dbc",
+  tarball_bytes: 42077,
   files: [
     "LICENSE",
     "README.md",

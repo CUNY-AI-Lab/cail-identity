@@ -5,6 +5,51 @@
   "type": "object",
   "additionalProperties": true,
   "required": ["iss", "aud", "sub", "exp"],
+  "allOf": [
+    {
+      "if": {
+        "properties": { "aud": { "const": "cail:gateway" } }
+      },
+      "then": {
+        "required": [
+          "scope",
+          "https://ailab.gc.cuny.edu/claims/budget_scope"
+        ],
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": [
+              "models:read",
+              "models:invoke",
+              "quota:read",
+              "models:read models:invoke",
+              "models:read quota:read",
+              "models:invoke models:read",
+              "models:invoke quota:read",
+              "quota:read models:read",
+              "quota:read models:invoke",
+              "models:read models:invoke quota:read",
+              "models:read quota:read models:invoke",
+              "models:invoke models:read quota:read",
+              "models:invoke quota:read models:read",
+              "quota:read models:read models:invoke",
+              "quota:read models:invoke models:read"
+            ],
+            "$comment": "OAuth-style single-space scope tokens. The verifier requires a nonempty unique subset of the three vocabulary values and rejects duplicates, unknown tokens, and alternate whitespace.",
+            "examples": [
+              "models:read",
+              "models:read models:invoke"
+            ]
+          },
+          "https://ailab.gc.cuny.edu/claims/budget_scope": {
+            "type": "string",
+            "enum": ["person", "classroom", "person-plus", "admin"],
+            "$comment": "Required for aud=cail:gateway; app is intentionally not a valid signed Gateway budget scope."
+          }
+        }
+      }
+    }
+  ],
   "properties": {
     "iss": { "type": "string", "minLength": 1 },
     "aud": { "type": "string", "minLength": 1 },
@@ -18,6 +63,15 @@
       "aud": "cail:workbench",
       "sub": "cail-0123456789abcdef0123456789abcdef",
       "log_sub": "cail-v1-fedcba9876543210fedcba9876543210",
+      "exp": 2000000000
+    },
+    {
+      "iss": "https://tools.ailab.gc.cuny.edu/cail-sso",
+      "aud": "cail:gateway",
+      "sub": "cail-0123456789abcdef0123456789abcdef",
+      "log_sub": "cail-v1-fedcba9876543210fedcba9876543210",
+      "scope": "models:read models:invoke",
+      "https://ailab.gc.cuny.edu/claims/budget_scope": "person",
       "exp": 2000000000
     }
   ]
