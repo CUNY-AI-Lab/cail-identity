@@ -12,6 +12,8 @@
  *   - Invalid tokens fail closed to `null` without revealing a failure reason.
  *     Configuration is loaded separately and remains an owned operator error.
  *   - A verified token must contain the stable pseudonymous CAIL subject.
+ *   - Exact `cail:gateway` tokens must carry the closed model-scope and
+ *     namespaced budget-scope access claims; app-audience tokens ignore them.
  *   - Subject derivation is explicit and intended only for a trusted CUNY
  *     authentication boundary, never for user-controlled request data.
  */
@@ -22,7 +24,21 @@ export interface CailIdentity {
     email?: string;
     name?: string;
     entitlements: string[];
+    /** Signed Gateway model-access scopes; present only for `cail:gateway`. */
+    scopes?: CailModelScope[];
+    /** Signed Gateway accounting budget scope; present only for `cail:gateway`. */
+    budgetScope?: CailBudgetScope;
 }
+/** Model-access scopes the Gateway identity contract recognizes. */
+export type CailModelScope = "models:read" | "models:invoke" | "quota:read";
+/** Budget scopes allowed on a person-bound Gateway identity. */
+export type CailBudgetScope = "person" | "classroom" | "person-plus" | "admin";
+/** Frozen vocabulary of model-access scopes accepted by Gateway tokens. */
+export declare const CAIL_MODEL_SCOPES: readonly ["models:read", "models:invoke", "quota:read"];
+/** Frozen vocabulary of budget scopes accepted by Gateway tokens. */
+export declare const CAIL_BUDGET_SCOPES: readonly ["person", "classroom", "person-plus", "admin"];
+/** Collision-resistant private claim carrying the Gateway budget partition. */
+export declare const CAIL_BUDGET_SCOPE_CLAIM = "https://ailab.gc.cuny.edu/claims/budget_scope";
 /** Stable pseudonymous identifier shared across CAIL applications. */
 export declare const CAIL_SUBJECT_PATTERN: RegExp;
 /** True only for the canonical stable CAIL subject representation. */

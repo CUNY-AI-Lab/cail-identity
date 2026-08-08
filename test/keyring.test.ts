@@ -3,6 +3,7 @@ import {
   CAIL_GATEWAY_AUDIENCE,
   CAIL_GATEWAY_IDENTITY_JWT_HEADER,
   CAIL_IDENTITY_JWT_HEADER,
+  CAIL_MODEL_SCOPES,
   identityKeyringHeaders,
   loadIdentityVerifierConfig,
   readIdentityKeyring,
@@ -24,6 +25,7 @@ async function keyringFixture() {
   const gatewayJwt = await issuer.mintIdentityJwt({
     audience: CAIL_GATEWAY_AUDIENCE,
     subject: TEST_SUBJECTS.alice,
+    gatewayAccess: { scopes: CAIL_MODEL_SCOPES, budgetScope: "person" },
   });
   const loaded = await loadIdentityVerifierConfig({
     jwks: issuer.jwksJson,
@@ -107,6 +109,7 @@ describe("identity keyring transport", () => {
     const bobGateway = await issuer.mintIdentityJwt({
       audience: CAIL_GATEWAY_AUDIENCE,
       subject: TEST_SUBJECTS.bob,
+      gatewayAccess: { scopes: CAIL_MODEL_SCOPES, budgetScope: "person" },
     });
     expect(
       await verifyKeyringGatewayJwt(
@@ -149,6 +152,7 @@ describe("identity keyring transport", () => {
     const expired = await issuer.mintIdentityJwt({
       audience: CAIL_GATEWAY_AUDIENCE,
       subject: TEST_SUBJECTS.alice,
+      gatewayAccess: { scopes: CAIL_MODEL_SCOPES, budgetScope: "person" },
       now: Math.floor(Date.now() / 1_000) - 3_600,
       expiresInSeconds: 1,
     });

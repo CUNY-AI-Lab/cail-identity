@@ -25,7 +25,14 @@
 
 import { SignJWT, exportJWK, generateKeyPair, type JSONWebKeySet, type JWK } from "jose";
 
-import { CAIL_CANONICAL_ISSUER } from "./index.js";
+import {
+  CAIL_BUDGET_SCOPE_CLAIM,
+  CAIL_BUDGET_SCOPES,
+  CAIL_CANONICAL_ISSUER,
+  CAIL_MODEL_SCOPES,
+  type CailBudgetScope,
+  type CailModelScope,
+} from "./index.js";
 
 // ---------------------------------------------------------------------------
 // Deterministic canonical test subjects
@@ -193,6 +200,12 @@ export interface MintTestIdentityJwtOptions {
   name?: string;
   /** Optional `entitlements` claim. */
   entitlements?: string[];
+  /**
+   * Typed access claims for a Gateway-audience identity leg. The helper does
+   * not infer or add these claims from `audience`; omit this option to mint a
+   * signed token that exercises the Gateway missing-claims rejection path.
+   */
+  gatewayAccess?: MintTestGatewayAccessOptions;
   /** `iss` claim override. Default: the issuer the kit was created with. */
   issuer?: string;
   /** Unix seconds used for `iat` (and the `exp` base). Default: now. */
@@ -213,6 +226,12 @@ export interface MintTestIdentityJwtOptions {
    * (alg tampering, wrong-key signatures) are intentionally out of scope.
    */
   claims?: Record<string, unknown>;
+}
+
+/** Test-only typed projection of the Gateway access claim pair. */
+export interface MintTestGatewayAccessOptions {
+  scopes: readonly CailModelScope[];
+  budgetScope: CailBudgetScope;
 }
 
 export interface TestIdentityIssuer {
@@ -288,6 +307,30 @@ export async function createTestIdentityIssuer(options?: {
           "mintIdentityJwt `claims` must be a plain object of claim overrides.",
         );
       }
+      if (mint.gatewayAccess !== undefined) {
+        const access = mint.gatewayAccess;
+        if (
+          typeof access !== "object" ||
+          access === null ||
+          Array.isArray(access) ||
+          !Array.isArray(access.scopes) ||
+          access.scopes.length === 0 ||
+          access.scopes.some(
+            (scope) =>
+              typeof scope !== "string" ||
+              !(CAIL_MODEL_SCOPES as readonly string[]).includes(scope),
+          ) ||
+          new Set(access.scopes).size !== access.scopes.length ||
+          typeof access.budgetScope !== "string" ||
+          !(CAIL_BUDGET_SCOPES as readonly string[]).includes(
+            access.budgetScope,
+          )
+        ) {
+          throw new TypeError(
+            "mintIdentityJwt `gatewayAccess` must contain a nonempty unique model-scope subset and a known budget scope.",
+          );
+        }
+      }
       const now = mint.now ?? Math.floor(Date.now() / 1000);
       const payload: Record<string, unknown> = {
         iss: mint.issuer ?? issuer,
@@ -302,6 +345,12 @@ export async function createTestIdentityIssuer(options?: {
         ...(mint.name !== undefined ? { name: mint.name } : {}),
         ...(mint.entitlements !== undefined
           ? { entitlements: mint.entitlements }
+          : {}),
+        ...(mint.gatewayAccess !== undefined
+          ? {
+              scope: mint.gatewayAccess.scopes.join(" "),
+              [CAIL_BUDGET_SCOPE_CLAIM]: mint.gatewayAccess.budgetScope,
+            }
           : {}),
         ...(mint.authTime !== undefined ? { auth_time: mint.authTime } : {}),
         ...(mint.notBefore !== undefined ? { nbf: mint.notBefore } : {}),

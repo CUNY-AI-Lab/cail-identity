@@ -30,7 +30,7 @@ Configure authentication outside the repository, for example in the user's
 ```
 
 These are registry configuration files that Bun reads; no npm CLI is required.
-Pin an exact release, for example `"@cuny-ai-lab/cail-identity": "5.1.2"`, then
+Pin an exact release, for example `"@cuny-ai-lab/cail-identity": "6.0.0"`, then
 run `bun install` with `NODE_AUTH_TOKEN` set to a
 [classic GitHub PAT](https://docs.github.com/en/packages/learn-github-packages/introduction-to-github-packages#authenticating-to-github-packages)
 that has `read:packages`. CI may supply the same environment variable from a
@@ -129,6 +129,8 @@ type CailIdentity = {
   email?: string;
   name?: string;
   entitlements: string[];
+  scopes?: ("models:read" | "models:invoke" | "quota:read")[];
+  budgetScope?: "person" | "classroom" | "person-plus" | "admin";
 };
 ```
 
@@ -175,6 +177,18 @@ minting.
 Callers own bounded JWKS loading and rotation. Publish old and new public keys
 under distinct `kid` values during an overlap, switch the signer, then remove
 the old key after issued tokens and clock tolerance have expired.
+
+### Gateway access claims
+
+The exact `aud: "cail:gateway"` identity leg is also the signed Gateway access
+assertion. It must carry a nonempty, duplicate-free, single-space OAuth-style
+`scope` string made only from `models:read`, `models:invoke`, and `quota:read`,
+plus `https://ailab.gc.cuny.edu/claims/budget_scope` set to `person`,
+`classroom`, `person-plus`, or `admin`. `app` is never a valid signed Gateway
+budget scope. Verified values are returned as `scopes` and `budgetScope` on
+`CailIdentity`. Other app-audience identity legs ignore these claims and omit
+them from the returned authority. This reuses the RFC 9068 `scope` convention;
+it is not a separate OAuth server or a claim of full RFC 9068 conformance.
 
 ## Config errors are not token errors
 
@@ -308,6 +322,15 @@ await issuer.mintIdentityJwt({ audience: AUD, notBefore: now + 3600 });
 // Array-valued aud — a shape CAIL verifiers must REJECT.
 await issuer.mintIdentityJwt({ audience: [AUD] });
 
+// Typed Gateway access claims (required when aud is exactly cail:gateway).
+await issuer.mintIdentityJwt({
+  audience: "cail:gateway",
+  gatewayAccess: {
+    scopes: ["models:read", "models:invoke"],
+    budgetScope: "person",
+  },
+});
+
 // Arbitrary payload claim overrides: set any claim, or `undefined` to omit.
 await issuer.mintIdentityJwt({
   audience: AUD,
@@ -328,7 +351,8 @@ not authenticate the caller. The packaged
 `@cuny-ai-lab/cail-identity/contract/principal-v1.json` schema is the
 language-neutral conformance surface.
 The adjacent `contract/identity-jwt-claims-v1.json` schema pins the optional,
-separately keyed `log_sub` claim used by operational event producers.
+separately keyed `log_sub` claim used by operational event producers and the
+conditional Gateway access claims.
 
 ## Development
 
@@ -351,8 +375,8 @@ The immutable 5.1.0 artifact was published before this authority correction,
 so its bundled README still says that 5.0.0 is published and 5.0.1 is pending.
 That artifact cannot be edited; a follow-up version is required for corrected
 package documentation. The v5.1.1 GitHub release name was then burned by an
-immutable release event and cannot be reused. The current candidate is v5.1.2;
-its release gate requires the v5.1.2 tag and an unoccupied registry version.
+immutable release event and cannot be reused. The current candidate is v6.0.0;
+its release gate requires the v6.0.0 tag and an unoccupied registry version.
 The dated candidate observations remain preserved separately from the current
 published authority.
 
