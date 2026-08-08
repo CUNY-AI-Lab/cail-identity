@@ -14,7 +14,39 @@
         "required": [
           "scope",
           "https://ailab.gc.cuny.edu/claims/budget_scope"
-        ]
+        ],
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": [
+              "models:read",
+              "models:invoke",
+              "quota:read",
+              "models:read models:invoke",
+              "models:read quota:read",
+              "models:invoke models:read",
+              "models:invoke quota:read",
+              "quota:read models:read",
+              "quota:read models:invoke",
+              "models:read models:invoke quota:read",
+              "models:read quota:read models:invoke",
+              "models:invoke models:read quota:read",
+              "models:invoke quota:read models:read",
+              "quota:read models:read models:invoke",
+              "quota:read models:invoke models:read"
+            ],
+            "$comment": "OAuth-style single-space scope tokens. The verifier requires a nonempty unique subset of the three vocabulary values and rejects duplicates, unknown tokens, and alternate whitespace.",
+            "examples": [
+              "models:read",
+              "models:read models:invoke"
+            ]
+          },
+          "https://ailab.gc.cuny.edu/claims/budget_scope": {
+            "type": "string",
+            "enum": ["person", "classroom", "person-plus", "admin"],
+            "$comment": "Required for aud=cail:gateway; app is intentionally not a valid signed Gateway budget scope."
+          }
+        }
       }
     }
   ],
@@ -23,34 +55,7 @@
     "aud": { "type": "string", "minLength": 1 },
     "sub": { "type": "string", "pattern": "^cail-[0-9a-f]{32}$" },
     "log_sub": { "type": "string", "pattern": "^cail-v1-[0-9a-f]{32}$" },
-    "exp": { "type": "number" },
-    "scope": {
-      "type": "string",
-      "enum": [
-        "models:read",
-        "models:invoke",
-        "quota:read",
-        "models:read models:invoke",
-        "models:read quota:read",
-        "models:invoke models:read",
-        "models:invoke quota:read",
-        "quota:read models:read",
-        "quota:read models:invoke",
-        "models:read models:invoke quota:read",
-        "models:read quota:read models:invoke",
-        "models:invoke models:read quota:read",
-        "models:invoke quota:read models:read",
-        "quota:read models:read models:invoke",
-        "quota:read models:invoke models:read"
-      ],
-      "$comment": "OAuth-style single-space scope tokens. The verifier requires a nonempty unique subset of the three vocabulary values and rejects duplicates, unknown tokens, and alternate whitespace.",
-      "examples": ["models:read", "models:read models:invoke"]
-    },
-    "https://ailab.gc.cuny.edu/claims/budget_scope": {
-      "type": "string",
-      "enum": ["person", "classroom", "person-plus", "admin"],
-      "$comment": "Required for aud=cail:gateway; app is intentionally not a valid signed Gateway budget scope."
-    }
+    "exp": { "type": "number" }
   },
   "examples": [
     {

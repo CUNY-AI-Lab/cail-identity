@@ -114,7 +114,7 @@ describe("signed Gateway access claims", () => {
     await expect(verifyIdentityJwt(token, gateway)).resolves.toBeNull();
   });
 
-  it.each(["app", "", "unknown", ["person"], null, {}])(
+  it.each(["app", "", "unknown", 42, null, {}])(
     "rejects malformed or forbidden budget scope %j",
     async (budgetScope) => {
       const { issuer, gateway } = await fixture();
@@ -129,6 +129,19 @@ describe("signed Gateway access claims", () => {
       await expect(verifyIdentityJwt(token, gateway)).resolves.toBeNull();
     },
   );
+
+  it("rejects an array-shaped budget scope even when its item is known", async () => {
+    const { issuer, gateway } = await fixture();
+    const token = await issuer.mintIdentityJwt({
+      audience: CAIL_GATEWAY_AUDIENCE,
+      now: NOW,
+      claims: {
+        scope: "models:read",
+        [CAIL_BUDGET_SCOPE_CLAIM]: ["person"],
+      },
+    });
+    await expect(verifyIdentityJwt(token, gateway)).resolves.toBeNull();
+  });
 
   it("does not treat app-audience access claims as authority", async () => {
     const { issuer, app } = await fixture();
