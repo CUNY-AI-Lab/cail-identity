@@ -30,7 +30,7 @@ Configure authentication outside the repository, for example in the user's
 ```
 
 These are registry configuration files that Bun reads; no npm CLI is required.
-Pin an exact release, for example `"@cuny-ai-lab/cail-identity": "6.0.0"`, then
+Pin an exact release, for example `"@cuny-ai-lab/cail-identity": "5.2.0"`, then
 run `bun install` with `NODE_AUTH_TOKEN` set to a
 [classic GitHub PAT](https://docs.github.com/en/packages/learn-github-packages/introduction-to-github-packages#authenticating-to-github-packages)
 that has `read:packages`. CI may supply the same environment variable from a
@@ -375,8 +375,8 @@ The immutable 5.1.0 artifact was published before this authority correction,
 so its bundled README still says that 5.0.0 is published and 5.0.1 is pending.
 That artifact cannot be edited; a follow-up version is required for corrected
 package documentation. The v5.1.1 GitHub release name was then burned by an
-immutable release event and cannot be reused. The current candidate is v6.0.0;
-its release gate requires the v6.0.0 tag and an unoccupied registry version.
+immutable release event and cannot be reused. The current candidate is v5.2.0;
+its release gate requires the v5.2.0 tag and an unoccupied registry version.
 The dated candidate observations remain preserved separately from the current
 published authority.
 

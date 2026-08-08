@@ -23,13 +23,13 @@ const publishedAuthorityPath = resolve(
 );
 const candidateAuthorityPath = resolve(
   root,
-  "evidence/package-release-authority-candidate-6.0.0.json",
+  "evidence/package-release-authority-candidate-5.2.0.json",
 );
 
 const packageName = "@cuny-ai-lab/cail-identity";
 const historicalCandidateVersion = "5.1.0";
 const publishedVersion = "5.1.0";
-const candidateVersion = "6.0.0";
+const candidateVersion = "5.2.0";
 const historicalRuntimeSha256 =
   "2300e88d443a6badb87dc34b73bcb8f41fc3e53f740938357d1e490fb06ea93a";
 const publishedRuntimeSha256 =
@@ -67,13 +67,13 @@ const candidateBehavior = {
     "932dafab753fbae38c8cc37b76592835d880a764b98d51c602b9a0adc6323830",
 } as const;
 const candidateSource = {
-  tag: "v6.0.0",
+  tag: "v5.2.0",
   commit: "a407b932112c11a77cf3a7e26e7345b1b566ac17",
   tree: "88e69c84bab95dc14abeab6196cae6fc3432812d",
 } as const;
 const candidatePackagePayload = {
   tarball_sha256:
-    "7b93de458579e9a88b2789835dceae9a4761f3fe7b6e7030fc0aeb60bd05cc8a",
+    "7dcfb24a6bfcb81f7bc65eccee241842a7a47b447ffe4b82381969f72fa79e7a",
   tarball_bytes: 42065,
   files: [
     "LICENSE",

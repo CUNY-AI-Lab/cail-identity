@@ -230,7 +230,7 @@ async function main(): Promise<void> {
   }
   const candidateAuthority = JSON.parse(
     readFileSync(
-      resolve(root, "evidence/package-release-authority-candidate-6.0.0.json"),
+      resolve(root, "evidence/package-release-authority-candidate-5.2.0.json"),
       "utf8",
     ),
   ) as unknown;
