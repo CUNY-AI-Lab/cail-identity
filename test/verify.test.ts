@@ -357,7 +357,7 @@ describe("verifyIdentityJwt time and options", () => {
     expect(await verify(await mintRsaJwt(claims({ nbf }), oldKey))).toBeNull();
   });
 
-  it.each(["0", null, [], {}])("rejects invalid iat %j when present", async (iat) => {
+  it.each(["0", null, {}, true])("rejects invalid iat %j when present", async (iat) => {
     expect(await verify(await mintRsaJwt(claims({ iat }), oldKey))).toBeNull();
   });
 });

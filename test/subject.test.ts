@@ -4,7 +4,6 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import {
-  canonicalizeCunySubject,
   deriveCailOperationalSubject,
   deriveCailSubject,
   isCailSubject,
@@ -40,11 +39,6 @@ const luaVectorRunner = fileURLToPath(
 );
 
 describe("stable CAIL subject", () => {
-  it("canonicalizes the established CUNY login realm contract", () => {
-    expect(canonicalizeCunySubject("  Bob@login.cuny.edu  ")).toBe("BOB");
-    expect(canonicalizeCunySubject("opaque-123")).toBe("OPAQUE-123");
-  });
-
   it("matches the shared TypeScript and Lua v2 derivation vectors", async () => {
     for (const vector of vectorContract.vectors) {
       await expect(
@@ -108,15 +102,19 @@ describe("stable CAIL subject", () => {
   });
 
   it("rejects empty and control-bearing inputs", async () => {
-    expect(() => canonicalizeCunySubject(" @login.cuny.edu ")).toThrow(
-      "must not be empty",
-    );
+    await expect(
+      deriveCailSubject({ ...options, oidcSubject: " @login.cuny.edu " }),
+    ).rejects.toThrow("must not be empty");
     // A trailing newline is ASCII whitespace: trimmed like the gate, not rejected.
-    expect(canonicalizeCunySubject("bob\n")).toBe("BOB");
-    // An interior control character still fails closed.
-    expect(() => canonicalizeCunySubject("bo\u0001b")).toThrow(
-      "control characters",
+    await expect(
+      deriveCailSubject({ ...options, oidcSubject: "bob\n" }),
+    ).resolves.toBe(
+      await deriveCailSubject({ ...options, oidcSubject: "BOB" }),
     );
+    // An interior control character still fails closed.
+    await expect(
+      deriveCailSubject({ ...options, oidcSubject: "bo\u0001b" }),
+    ).rejects.toThrow("control characters");
     await expect(
       deriveCailSubject({ ...options, issuer: "", oidcSubject: "bob" }),
     ).rejects.toThrow("issuer");
@@ -141,21 +139,17 @@ describe("stable CAIL subject", () => {
     // implementation. A Unicode-aware toUpperCase would fold these into
     // colliding subjects (ß→SS, ı→I) — merging distinct people. They must
     // stay distinct and pass through un-uppercased.
-    expect(canonicalizeCunySubject("straße")).toBe("STRAßE");
-    expect(canonicalizeCunySubject("straße")).not.toBe(
-      canonicalizeCunySubject("strasse"),
-    );
-    expect(canonicalizeCunySubject("bıb")).toBe("BıB");
-    expect(canonicalizeCunySubject("bıb")).not.toBe(canonicalizeCunySubject("bib"));
     // Non-ASCII whitespace (NBSP) is NOT trimmed — ASCII %s only, like the gate.
-    expect(canonicalizeCunySubject("bob\u00a0")).toBe("BOB\u00a0");
-    expect(canonicalizeCunySubject("bob\u00a0")).not.toBe(
-      canonicalizeCunySubject("bob"),
-    );
     // Distinct derived subjects follow from distinct canonical forms.
+    const sharpS = await deriveCailSubject({ ...options, oidcSubject: "straße" });
+    const latin = await deriveCailSubject({ ...options, oidcSubject: "strasse" });
     const a = await deriveCailSubject({ ...options, oidcSubject: "bıb" });
     const b = await deriveCailSubject({ ...options, oidcSubject: "bib" });
+    const nbsp = await deriveCailSubject({ ...options, oidcSubject: "bob\u00a0" });
+    const plain = await deriveCailSubject({ ...options, oidcSubject: "bob" });
+    expect(sharpS).not.toBe(latin);
     expect(a).not.toBe(b);
+    expect(nbsp).not.toBe(plain);
   });
 
   it("recognizes only the canonical public subject format", () => {

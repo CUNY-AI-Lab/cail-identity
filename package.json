@@ -34,11 +34,10 @@
   "packageManager": "bun@1.3.14",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "check": "bun run typecheck && bun run test && bun run test:lua && bun run check:dist && bun run check:package",
-    "check:dist": "bun scripts/check-dist.ts",
+    "check": "bun run test && bun run typecheck && bun run test:lua && bun run check:package",
     "check:package": "bun pm pack --dry-run --ignore-scripts",
     "typecheck": "tsc -p tsconfig.build.json --noEmit && tsc -p tsconfig.test.json",
-    "test": "vitest run",
+    "test": "bun run build && vitest run",
     "test:lua": "luajit test/subject-derivation-v2.lua",
     "test:watch": "vitest",
     "prepublishOnly": "bun run check",

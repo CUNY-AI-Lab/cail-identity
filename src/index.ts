@@ -66,7 +66,7 @@ export const CAIL_BUDGET_SCOPE_CLAIM =
   "https://ailab.gc.cuny.edu/claims/budget_scope";
 
 /** Stable pseudonymous identifier shared across CAIL applications. */
-export const CAIL_SUBJECT_PATTERN = /^cail-[0-9a-f]{32}$/;
+const CAIL_SUBJECT_PATTERN = /^cail-[0-9a-f]{32}$/;
 
 /** True only for the canonical stable CAIL subject representation. */
 export function isCailSubject(value: unknown): value is string {
@@ -186,7 +186,7 @@ function encodeSubjectHmacInput(
  * NBSP trimming — a merge far beyond the realm quirk. CUNY subjects are ASCII,
  * so no real subject changes. It does not authenticate the value.
  */
-export function canonicalizeCunySubject(subject: string): string {
+function canonicalizeCunySubject(subject: string): string {
   if (typeof subject !== "string") {
     throw new TypeError("CUNY OIDC subject must be a string.");
   }
@@ -261,15 +261,12 @@ export async function deriveCailSubject(
  * so an app subject can never collide with a user subject in a spend
  * partition, an audit row, or a workspace key.
  */
-export const APP_SUBJECT_PATTERN = /^app-[0-9a-f]{32}$/;
+const APP_SUBJECT_PATTERN = /^app-[0-9a-f]{32}$/;
 
 /** True only for the canonical stable CAIL app-principal subject. */
 export function isAppSubject(value: unknown): value is string {
   return typeof value === "string" && APP_SUBJECT_PATTERN.test(value);
 }
-
-/** A stable subject accepted by CAIL accounting and ownership boundaries. */
-export type CailPrincipalSubject = string;
 
 /**
  * True for a canonical user or application principal subject.
@@ -280,11 +277,11 @@ export type CailPrincipalSubject = string;
  */
 export function isCailPrincipalSubject(
   value: unknown,
-): value is CailPrincipalSubject {
+): value is string {
   return isCailSubject(value) || isAppSubject(value);
 }
 
-export const CAIL_OPERATIONAL_SUBJECT_PATTERN = /^cail-v1-[0-9a-f]{32}$/;
+const CAIL_OPERATIONAL_SUBJECT_PATTERN = /^cail-v1-[0-9a-f]{32}$/;
 
 export function isCailOperationalSubject(value: unknown): value is string {
   return (
@@ -970,13 +967,13 @@ export async function verifyIdentityJwt(
   }
 }
 
-/* ── Identity keyring transport (contract/identity-keyring-v1.json) ────── */
+/* ── Identity keyring transport ─────────────────────────────────────────── */
 
 /**
  * Header carrying the identity JWT addressed to the receiving application's
  * own audience. Canonical name for what every consumer already reads.
  */
-export const CAIL_IDENTITY_JWT_HEADER = "x-cail-identity-jwt";
+const CAIL_IDENTITY_JWT_HEADER = "x-cail-identity-jwt";
 
 /**
  * Header carrying the same person's gateway-audience identity JWT
@@ -984,7 +981,7 @@ export const CAIL_IDENTITY_JWT_HEADER = "x-cail-identity-jwt";
  * Model API when acting for the person. Optional: only routes whose tools
  * call the gateway receive it.
  */
-export const CAIL_GATEWAY_IDENTITY_JWT_HEADER = "x-cail-gateway-identity-jwt";
+const CAIL_GATEWAY_IDENTITY_JWT_HEADER = "x-cail-gateway-identity-jwt";
 
 /** The audience every gateway keyring leg must carry. */
 export const CAIL_GATEWAY_AUDIENCE = "cail:gateway";
@@ -997,7 +994,7 @@ export const CAIL_GATEWAY_AUDIENCE = "cail:gateway";
  * storing or forwarding it. Claims inside `gatewayJwt` are never authority
  * for the application.
  */
-export interface IdentityKeyring {
+interface IdentityKeyring {
   appJwt: string;
   gatewayJwt?: string;
 }
@@ -1032,29 +1029,6 @@ export function readIdentityKeyring(headers: Headers): IdentityKeyring | null {
   if (gatewayJwt === null) return { appJwt };
   if (!isCompactJwsShape(gatewayJwt)) return null;
   return { appJwt, gatewayJwt };
-}
-
-/**
- * Render a keyring as the headers the doorway (or a test harness) attaches.
- * Throws on structurally invalid tokens: a proxy must never emit a keyring
- * that its own reader would reject.
- */
-export function identityKeyringHeaders(
-  keyring: IdentityKeyring,
-): Record<string, string> {
-  if (!isCompactJwsShape(keyring.appJwt)) {
-    throw new TypeError("appJwt is not a compact JWS.");
-  }
-  if (keyring.gatewayJwt === undefined) {
-    return { [CAIL_IDENTITY_JWT_HEADER]: keyring.appJwt };
-  }
-  if (!isCompactJwsShape(keyring.gatewayJwt)) {
-    throw new TypeError("gatewayJwt is not a compact JWS.");
-  }
-  return {
-    [CAIL_IDENTITY_JWT_HEADER]: keyring.appJwt,
-    [CAIL_GATEWAY_IDENTITY_JWT_HEADER]: keyring.gatewayJwt,
-  };
 }
 
 /**

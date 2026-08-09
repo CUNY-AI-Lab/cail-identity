@@ -92,7 +92,7 @@ Headless apps with their own spend partition get `app-` + the first 32
 lowercase hexadecimal characters of `HMAC-SHA256(subjectSalt, "app|" + appId)`
 — the same construction as the user subject, namespaced by the `app|`
 domain-separation prefix. The disjoint `app-` output prefix
-(`APP_SUBJECT_PATTERN`, `isAppSubject`) means an app subject can never collide
+(`isAppSubject`) means an app subject can never collide
 with a user `cail-` subject in a spend partition, audit row, or workspace key.
 The app id is a stable control-plane identifier used byte-exact (no
 canonicalization) and must come from a trusted issuing service, never from
@@ -250,15 +250,14 @@ design. The keyring is the sanctioned alternative: the issuing doorway mints
 every leg in one sign-in event and delivers them as two headers, one compact
 JWS each.
 
-- `CAIL_IDENTITY_JWT_HEADER` (`x-cail-identity-jwt`) — the token addressed to
-  the receiving application's own audience.
-- `CAIL_GATEWAY_IDENTITY_JWT_HEADER` (`x-cail-gateway-identity-jwt`) —
+- `x-cail-identity-jwt` — the token addressed to the receiving application's
+  own audience.
+- `x-cail-gateway-identity-jwt` —
   optional; the same person's `cail:gateway`-audience token, forwarded
   verbatim to CAIL Model API and never read as authority by the application.
 
 `readIdentityKeyring(headers)` is transport parsing only and fails the whole
-keyring closed on any present-but-malformed leg. `identityKeyringHeaders`
-renders headers a reader will accept, or throws. Before storing or forwarding
+keyring closed on any present-but-malformed leg. Before storing or forwarding
 the gateway leg, applications MUST call `verifyKeyringGatewayJwt(keyring,
 gatewayConfig, verifiedAppSubject)` — full verification against a
 `cail:gateway`-audience config plus the invariant that both legs name the
@@ -362,9 +361,9 @@ bun run check
 bun audit
 ```
 
-Build output is committed and ships in the published package, so consumers
-install without a build step. `bun run check` includes the standalone LuaJIT
-derivation vectors, verifies committed output, and checks the package contents.
+`bun run check` builds the package, runs the TypeScript and standalone LuaJIT
+derivation tests, and checks the package contents. The build output ships in
+the published package, so consumers install without a build step.
 Publishing a stable (non-prerelease) GitHub release whose tag matches `v` plus
 the package version publishes that release source to GitHub Packages with the
 repository's workflow token. Package publication does not update a production

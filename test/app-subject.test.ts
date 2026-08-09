@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  APP_SUBJECT_PATTERN,
   deriveAppSubject,
   isAppSubject,
   isCailSubject,
@@ -40,9 +39,8 @@ describe("stable CAIL app-principal subject", () => {
     expect(upper).not.toBe(lower);
   });
 
-  it("produces subjects the app pattern accepts and the user pattern rejects", async () => {
+  it("produces a canonical app subject disjoint from user subjects", async () => {
     const subject = await deriveAppSubject("kale:reference-librarian", salt);
-    expect(APP_SUBJECT_PATTERN.test(subject)).toBe(true);
     expect(isAppSubject(subject)).toBe(true);
     expect(isCailSubject(subject)).toBe(false);
   });

@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CAIL_GATEWAY_AUDIENCE,
-  CAIL_GATEWAY_IDENTITY_JWT_HEADER,
-  CAIL_IDENTITY_JWT_HEADER,
   CAIL_MODEL_SCOPES,
-  identityKeyringHeaders,
   loadIdentityVerifierConfig,
   readIdentityKeyring,
   verifyKeyringGatewayJwt,
@@ -15,6 +12,8 @@ import {
 } from "../src/testing";
 
 const APP_AUDIENCE = "cail:site-studio";
+const APP_JWT_HEADER = "x-cail-identity-jwt";
+const GATEWAY_JWT_HEADER = "x-cail-gateway-identity-jwt";
 
 async function keyringFixture() {
   const issuer = await createTestIdentityIssuer();
@@ -39,15 +38,16 @@ async function keyringFixture() {
 describe("identity keyring transport", () => {
   it("round-trips a two-leg keyring through headers", async () => {
     const { appJwt, gatewayJwt } = await keyringFixture();
-    const headers = new Headers(
-      identityKeyringHeaders({ appJwt, gatewayJwt }),
-    );
+    const headers = new Headers({
+      [APP_JWT_HEADER]: appJwt,
+      [GATEWAY_JWT_HEADER]: gatewayJwt,
+    });
     expect(readIdentityKeyring(headers)).toEqual({ appJwt, gatewayJwt });
   });
 
   it("reads an app-only keyring when the gateway header is absent", async () => {
     const { appJwt } = await keyringFixture();
-    const headers = new Headers({ [CAIL_IDENTITY_JWT_HEADER]: appJwt });
+    const headers = new Headers({ [APP_JWT_HEADER]: appJwt });
     expect(readIdentityKeyring(headers)).toEqual({ appJwt });
   });
 
@@ -59,13 +59,13 @@ describe("identity keyring transport", () => {
     const { appJwt, gatewayJwt } = await keyringFixture();
     for (const bad of ["", "not-a-jwt", "a.b", `${gatewayJwt},${gatewayJwt}`]) {
       const badGateway = new Headers({
-        [CAIL_IDENTITY_JWT_HEADER]: appJwt,
-        [CAIL_GATEWAY_IDENTITY_JWT_HEADER]: bad,
+        [APP_JWT_HEADER]: appJwt,
+        [GATEWAY_JWT_HEADER]: bad,
       });
       expect(readIdentityKeyring(badGateway)).toBeNull();
       const badApp = new Headers({
-        [CAIL_IDENTITY_JWT_HEADER]: bad,
-        [CAIL_GATEWAY_IDENTITY_JWT_HEADER]: gatewayJwt,
+        [APP_JWT_HEADER]: bad,
+        [GATEWAY_JWT_HEADER]: gatewayJwt,
       });
       expect(readIdentityKeyring(badApp)).toBeNull();
     }
@@ -73,18 +73,10 @@ describe("identity keyring transport", () => {
 
   it("rejects duplicate headers by construction", async () => {
     const { appJwt, gatewayJwt } = await keyringFixture();
-    const headers = new Headers({ [CAIL_IDENTITY_JWT_HEADER]: appJwt });
-    headers.append(CAIL_GATEWAY_IDENTITY_JWT_HEADER, gatewayJwt);
-    headers.append(CAIL_GATEWAY_IDENTITY_JWT_HEADER, gatewayJwt);
+    const headers = new Headers({ [APP_JWT_HEADER]: appJwt });
+    headers.append(GATEWAY_JWT_HEADER, gatewayJwt);
+    headers.append(GATEWAY_JWT_HEADER, gatewayJwt);
     expect(readIdentityKeyring(headers)).toBeNull();
-  });
-
-  it("refuses to emit a malformed keyring", async () => {
-    const { appJwt } = await keyringFixture();
-    expect(() =>
-      identityKeyringHeaders({ appJwt, gatewayJwt: "nope" }),
-    ).toThrow(TypeError);
-    expect(() => identityKeyringHeaders({ appJwt: "" })).toThrow(TypeError);
   });
 
   it("verifies a matching gateway leg to the app-leg subject", async () => {

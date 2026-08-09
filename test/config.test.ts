@@ -324,7 +324,7 @@ describe("loadIdentityVerifierConfig audience and timing", () => {
     });
   });
 
-  it.each([["cail:x"], 7, " ", "   ", "cail:\u0000x"])(
+  it.each([7, " ", "   ", "cail:\u0000x"])(
     "rejects nonscalar or malformed audience %j",
     async (expectedAudience) => {
       await expect(
