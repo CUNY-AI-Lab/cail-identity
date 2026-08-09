@@ -129,8 +129,6 @@ type CailIdentity = {
   email?: string;
   name?: string;
   entitlements: string[];
-  scopes?: ("models:read" | "models:invoke" | "quota:read")[];
-  budgetScope?: "person" | "classroom" | "person-plus" | "admin";
 };
 ```
 
@@ -178,17 +176,9 @@ Callers own bounded JWKS loading and rotation. Publish old and new public keys
 under distinct `kid` values during an overlap, switch the signer, then remove
 the old key after issued tokens and clock tolerance have expired.
 
-### Gateway access claims
-
-The exact `aud: "cail:gateway"` identity leg is also the signed Gateway access
-assertion. It must carry a nonempty, duplicate-free, single-space OAuth-style
-`scope` string made only from `models:read`, `models:invoke`, and `quota:read`,
-plus `https://ailab.gc.cuny.edu/claims/budget_scope` set to `person`,
-`classroom`, `person-plus`, or `admin`. `app` is never a valid signed Gateway
-budget scope. Verified values are returned as `scopes` and `budgetScope` on
-`CailIdentity`. Other app-audience identity legs ignore these claims and omit
-them from the returned authority. This reuses the RFC 9068 `scope` convention;
-it is not a separate OAuth server or a claim of full RFC 9068 conformance.
+The exact `aud: "cail:gateway"` identity leg uses this same identity-only
+shape. Model access and accounting policy are owned by Registry/Gateway after
+verification; this package does not parse or return signed policy claims.
 
 ## Config errors are not token errors
 
@@ -222,12 +212,12 @@ signatures remain token failures.
 ## Platform role
 
 CAIL applications verify incoming identity JWTs at their own trusted boundary.
-A gateway JWT has one scalar audience for the service receiving it and must
-never be relayed to another service. Model-platform calls use a user-bound CAIL
-credential or an approved audience-pinned exchange/facade; only a request sent
-directly to the model proxy may carry a JWT whose sole audience is
-`cail:model-proxy`. The proxy binds verified subjects and credentials to model
-access and spend attribution.
+Every JWT has one scalar audience and an app-audience token must not be relayed
+to another service. A keyring's `cail:gateway` leg may be forwarded verbatim to
+CAIL Model API only after `verifyKeyringGatewayJwt` verifies its signature,
+claims, and same-subject invariant. Registry/Gateway then applies model-access
+and accounting policy to the verified subject; this package does not provide
+that policy.
 
 Subject derivation (`deriveCailSubject`) exists for the trusted authentication
 boundary only — the SSO gate and its verification tooling. Application code
@@ -321,13 +311,9 @@ await issuer.mintIdentityJwt({ audience: AUD, notBefore: now + 3600 });
 // Array-valued aud — a shape CAIL verifiers must REJECT.
 await issuer.mintIdentityJwt({ audience: [AUD] });
 
-// Typed Gateway access claims (required when aud is exactly cail:gateway).
+// Gateway legs are ordinary claimless identity JWTs.
 await issuer.mintIdentityJwt({
   audience: "cail:gateway",
-  gatewayAccess: {
-    scopes: ["models:read", "models:invoke"],
-    budgetScope: "person",
-  },
 });
 
 // Arbitrary payload claim overrides: set any claim, or `undefined` to omit.
@@ -350,8 +336,7 @@ not authenticate the caller. The packaged
 `@cuny-ai-lab/cail-identity/contract/principal-v1.json` schema is the
 language-neutral conformance surface.
 The adjacent `contract/identity-jwt-claims-v1.json` schema pins the optional,
-separately keyed `log_sub` claim used by operational event producers and the
-conditional Gateway access claims.
+separately keyed `log_sub` claim used by operational event producers.
 
 ## Development
 
