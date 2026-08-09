@@ -13,7 +13,6 @@ import { beforeAll, describe, expect, it } from "vitest";
 import {
   CAIL_CANONICAL_ISSUER,
   CAIL_STAGING_ISSUER,
-  CAIL_SUBJECT_PATTERN,
   deriveCailSubject,
   isCailSubject,
   loadIdentityVerifierConfig,
@@ -60,10 +59,9 @@ describe("canonicalTestSubject", () => {
     expect(subjects.size).toBe(seeds.length);
   });
 
-  it("always matches CAIL_SUBJECT_PATTERN / isCailSubject", () => {
+  it("always matches the canonical CAIL subject shape", () => {
     for (const seed of ["", "alice", "user:bob@x", "ünïcode-Σ", "a".repeat(500)]) {
       const subject = canonicalTestSubject(seed);
-      expect(subject).toMatch(CAIL_SUBJECT_PATTERN);
       expect(isCailSubject(subject)).toBe(true);
     }
   });
@@ -105,8 +103,8 @@ describe("canonicalTestSubject", () => {
       subjectSalt: "test-only-salt-at-least-32-bytes-long",
     });
     const fixture = canonicalTestSubject("someone");
-    expect(fixture).toMatch(CAIL_SUBJECT_PATTERN);
-    expect(derived).toMatch(CAIL_SUBJECT_PATTERN);
+    expect(isCailSubject(fixture)).toBe(true);
+    expect(isCailSubject(derived)).toBe(true);
     expect(fixture.length).toBe(derived.length);
   });
 

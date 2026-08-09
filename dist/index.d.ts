@@ -39,29 +39,8 @@ export declare const CAIL_MODEL_SCOPES: readonly ["models:read", "models:invoke"
 export declare const CAIL_BUDGET_SCOPES: readonly ["person", "classroom", "person-plus", "admin"];
 /** Collision-resistant private claim carrying the Gateway budget partition. */
 export declare const CAIL_BUDGET_SCOPE_CLAIM = "https://ailab.gc.cuny.edu/claims/budget_scope";
-/** Stable pseudonymous identifier shared across CAIL applications. */
-export declare const CAIL_SUBJECT_PATTERN: RegExp;
 /** True only for the canonical stable CAIL subject representation. */
 export declare function isCailSubject(value: unknown): value is string;
-/**
- * Canonicalize the trusted CUNY OIDC subject used as pseudonym input.
- *
- * OIDC Core defines `sub` as a case-sensitive opaque string; a compliant RP
- * compares it byte-for-byte and never normalizes. CAIL normalizes for ONE
- * documented reason: CUNYLogin is non-compliant and emits the same person as
- * two forms (`BOB` and `bob@login.cuny.edu`). So we normalize exactly and only
- * that quirk — ASCII whitespace trim, ASCII-only uppercase, one trailing
- * `@LOGIN.CUNY.EDU` realm removed — and leave everything else opaque.
- *
- * ASCII-only is load-bearing: accepted inputs must produce byte-identical
- * output to the gate's LuaJIT `canonicalize_sub` (byte-wise `:upper()` and
- * `%s`). A
- * Unicode-aware `toUpperCase()`/`trim()` would (a) diverge from the gate on
- * non-ASCII input and (b) *collide distinct people* — `ß`→`SS`, dotless `ı`→`I`,
- * NBSP trimming — a merge far beyond the realm quirk. CUNY subjects are ASCII,
- * so no real subject changes. It does not authenticate the value.
- */
-export declare function canonicalizeCunySubject(subject: string): string;
 export interface DeriveCailSubjectOptions {
     /** Exact trusted OIDC issuer; it namespaces otherwise identical subjects. */
     issuer: string;
@@ -77,19 +56,8 @@ export interface DeriveCailSubjectOptions {
  * versioned, UTF-8 byte-length-prefixed ownership-subject material.
  */
 export declare function deriveCailSubject(options: DeriveCailSubjectOptions): Promise<string>;
-/**
- * Stable pseudonymous app-principal identifier (ADR-0007).
- *
- * App principals are headless applications with their own spend partition.
- * The `app-` prefix is disjoint from the user `cail-` prefix by construction,
- * so an app subject can never collide with a user subject in a spend
- * partition, an audit row, or a workspace key.
- */
-export declare const APP_SUBJECT_PATTERN: RegExp;
 /** True only for the canonical stable CAIL app-principal subject. */
 export declare function isAppSubject(value: unknown): value is string;
-/** A stable subject accepted by CAIL accounting and ownership boundaries. */
-export type CailPrincipalSubject = string;
 /**
  * True for a canonical user or application principal subject.
  *
@@ -97,8 +65,7 @@ export type CailPrincipalSubject = string;
  * services still obtain user subjects from a verified identity JWT and app
  * subjects from their trusted control plane.
  */
-export declare function isCailPrincipalSubject(value: unknown): value is CailPrincipalSubject;
-export declare const CAIL_OPERATIONAL_SUBJECT_PATTERN: RegExp;
+export declare function isCailPrincipalSubject(value: unknown): value is string;
 export declare function isCailOperationalSubject(value: unknown): value is string;
 export interface DeriveCailOperationalSubjectOptions {
     issuer: string;
@@ -184,18 +151,6 @@ export declare function loadIdentityVerifierConfig(input: LoadIdentityVerifierCo
  * throws, so it cannot be mislabeled as invalid credentials.
  */
 export declare function verifyIdentityJwt(token: string, config: IdentityVerifierConfig): Promise<CailIdentity | null>;
-/**
- * Header carrying the identity JWT addressed to the receiving application's
- * own audience. Canonical name for what every consumer already reads.
- */
-export declare const CAIL_IDENTITY_JWT_HEADER = "x-cail-identity-jwt";
-/**
- * Header carrying the same person's gateway-audience identity JWT
- * (`aud: "cail:gateway"`), for the application to forward verbatim to CAIL
- * Model API when acting for the person. Optional: only routes whose tools
- * call the gateway receive it.
- */
-export declare const CAIL_GATEWAY_IDENTITY_JWT_HEADER = "x-cail-gateway-identity-jwt";
 /** The audience every gateway keyring leg must carry. */
 export declare const CAIL_GATEWAY_AUDIENCE = "cail:gateway";
 /**
@@ -206,7 +161,7 @@ export declare const CAIL_GATEWAY_AUDIENCE = "cail:gateway";
  * storing or forwarding it. Claims inside `gatewayJwt` are never authority
  * for the application.
  */
-export interface IdentityKeyring {
+interface IdentityKeyring {
     appJwt: string;
     gatewayJwt?: string;
 }
@@ -221,12 +176,6 @@ export interface IdentityKeyring {
  * absent gateway header yields a keyring without that leg.
  */
 export declare function readIdentityKeyring(headers: Headers): IdentityKeyring | null;
-/**
- * Render a keyring as the headers the doorway (or a test harness) attaches.
- * Throws on structurally invalid tokens: a proxy must never emit a keyring
- * that its own reader would reject.
- */
-export declare function identityKeyringHeaders(keyring: IdentityKeyring): Record<string, string>;
 /**
  * Verify a keyring's gateway leg before the application stores or forwards
  * it: full {@link verifyIdentityJwt} verification against a gateway-audience

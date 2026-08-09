@@ -8,7 +8,7 @@
  *
  * Why this exists: consumers kept inventing structurally invalid subjects
  * (`cail-abc123`, `user:${email}`) in their test fixtures, which broke on the
- * v4 canonical-subject adoption (`CAIL_SUBJECT_PATTERN` enforcement). These
+ * v4 canonical-subject adoption (`isCailSubject` enforcement). These
  * helpers make the VALID shapes cheaper to reach than the invalid ones:
  *
  *   - {@link canonicalTestSubject} — deterministic, structurally canonical
@@ -28,8 +28,9 @@ import { type CailBudgetScope, type CailModelScope } from "./index.js";
  * Deterministic, structurally canonical CAIL test subject from a readable
  * seed: `cail-` + the first 32 lowercase hex characters of SHA-256(seed).
  *
- * Always matches `CAIL_SUBJECT_PATTERN` / `isCailSubject` — the same SHAPE
- * `deriveCailSubject` produces — so fixtures survive canonical-subject
+ * Always matches the canonical CAIL subject shape accepted by
+ * `isCailSubject` — the same SHAPE `deriveCailSubject` produces — so fixtures
+ * survive canonical-subject
  * enforcement. Distinct seeds give distinct subjects; the same seed always
  * gives the same subject, so fixtures stay tellable-apart without
  * hand-maintaining hex literals.
@@ -41,7 +42,7 @@ import { type CailBudgetScope, type CailModelScope } from "./index.js";
 export declare function canonicalTestSubject(seed: string): string;
 /**
  * Ready-made canonical test subjects for the common case. All distinct, all
- * matching `CAIL_SUBJECT_PATTERN`, each equal to
+ * matching the canonical CAIL subject shape, each equal to
  * `canonicalTestSubject(<name>)`.
  */
 export declare const TEST_SUBJECTS: {

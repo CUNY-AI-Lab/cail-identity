@@ -92,7 +92,7 @@ describe("published package entry", () => {
     ).resolves.toEqual({ ok: false, reason: "issuer_unsupported" });
   });
 
-  it("enforces RSA public-number eligibility through committed dist", async () => {
+  it("enforces RSA public-number eligibility through the package entry", async () => {
     const modulus = Buffer.from(fixture.publicJwk.n!, "base64url");
     expect(modulus).toHaveLength(256);
     expect(modulus[0]! & 0x80).not.toBe(0);
@@ -149,7 +149,7 @@ describe("published package entry", () => {
     }
   });
 
-  it("retains duplicate, private, issuer, and timing guards through committed dist", async () => {
+  it("retains duplicate, private, issuer, and timing guards through the package entry", async () => {
     const malformedJwks = [
       JSON.stringify({
         keys: [fixture.publicJwk, { ...fixture.publicJwk }],
@@ -185,7 +185,7 @@ describe("published package entry", () => {
     ).resolves.toEqual({ ok: false, reason: "timing_invalid" });
   });
 
-  it("rejects whitespace-only audience through committed dist", async () => {
+  it("rejects whitespace-only audience through the package entry", async () => {
     for (const expectedAudience of [" ", "   "]) {
       const matchingToken = await mintRsaJwt(
         claims(expectedAudience),
@@ -214,7 +214,7 @@ describe("published package entry", () => {
     }
   });
 
-  it("reads hostile config getters once through committed dist", async () => {
+  it("reads hostile config getters once through the package entry", async () => {
     const counts = new Map<string, number>();
     const first: Record<string, unknown> = {
       jwks: JSON.stringify(fixture.jwks),

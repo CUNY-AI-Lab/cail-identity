@@ -34,7 +34,7 @@ export const CAIL_BUDGET_SCOPES = Object.freeze([
 /** Collision-resistant private claim carrying the Gateway budget partition. */
 export const CAIL_BUDGET_SCOPE_CLAIM = "https://ailab.gc.cuny.edu/claims/budget_scope";
 /** Stable pseudonymous identifier shared across CAIL applications. */
-export const CAIL_SUBJECT_PATTERN = /^cail-[0-9a-f]{32}$/;
+const CAIL_SUBJECT_PATTERN = /^cail-[0-9a-f]{32}$/;
 /** True only for the canonical stable CAIL subject representation. */
 export function isCailSubject(value) {
     return typeof value === "string" && CAIL_SUBJECT_PATTERN.test(value);
@@ -116,7 +116,7 @@ function encodeSubjectHmacInput(domain, issuer, canonicalSubject) {
  * NBSP trimming — a merge far beyond the realm quirk. CUNY subjects are ASCII,
  * so no real subject changes. It does not authenticate the value.
  */
-export function canonicalizeCunySubject(subject) {
+function canonicalizeCunySubject(subject) {
     if (typeof subject !== "string") {
         throw new TypeError("CUNY OIDC subject must be a string.");
     }
@@ -161,7 +161,7 @@ export async function deriveCailSubject(options) {
  * so an app subject can never collide with a user subject in a spend
  * partition, an audit row, or a workspace key.
  */
-export const APP_SUBJECT_PATTERN = /^app-[0-9a-f]{32}$/;
+const APP_SUBJECT_PATTERN = /^app-[0-9a-f]{32}$/;
 /** True only for the canonical stable CAIL app-principal subject. */
 export function isAppSubject(value) {
     return typeof value === "string" && APP_SUBJECT_PATTERN.test(value);
@@ -176,7 +176,7 @@ export function isAppSubject(value) {
 export function isCailPrincipalSubject(value) {
     return isCailSubject(value) || isAppSubject(value);
 }
-export const CAIL_OPERATIONAL_SUBJECT_PATTERN = /^cail-v1-[0-9a-f]{32}$/;
+const CAIL_OPERATIONAL_SUBJECT_PATTERN = /^cail-v1-[0-9a-f]{32}$/;
 export function isCailOperationalSubject(value) {
     return (typeof value === "string" && CAIL_OPERATIONAL_SUBJECT_PATTERN.test(value));
 }
@@ -663,19 +663,19 @@ export async function verifyIdentityJwt(token, config) {
         return null;
     }
 }
-/* ── Identity keyring transport (contract/identity-keyring-v1.json) ────── */
+/* ── Identity keyring transport ─────────────────────────────────────────── */
 /**
  * Header carrying the identity JWT addressed to the receiving application's
  * own audience. Canonical name for what every consumer already reads.
  */
-export const CAIL_IDENTITY_JWT_HEADER = "x-cail-identity-jwt";
+const CAIL_IDENTITY_JWT_HEADER = "x-cail-identity-jwt";
 /**
  * Header carrying the same person's gateway-audience identity JWT
  * (`aud: "cail:gateway"`), for the application to forward verbatim to CAIL
  * Model API when acting for the person. Optional: only routes whose tools
  * call the gateway receive it.
  */
-export const CAIL_GATEWAY_IDENTITY_JWT_HEADER = "x-cail-gateway-identity-jwt";
+const CAIL_GATEWAY_IDENTITY_JWT_HEADER = "x-cail-gateway-identity-jwt";
 /** The audience every gateway keyring leg must carry. */
 export const CAIL_GATEWAY_AUDIENCE = "cail:gateway";
 const KEYRING_JWT_MAX_LENGTH = 8_192;
@@ -708,26 +708,6 @@ export function readIdentityKeyring(headers) {
     if (!isCompactJwsShape(gatewayJwt))
         return null;
     return { appJwt, gatewayJwt };
-}
-/**
- * Render a keyring as the headers the doorway (or a test harness) attaches.
- * Throws on structurally invalid tokens: a proxy must never emit a keyring
- * that its own reader would reject.
- */
-export function identityKeyringHeaders(keyring) {
-    if (!isCompactJwsShape(keyring.appJwt)) {
-        throw new TypeError("appJwt is not a compact JWS.");
-    }
-    if (keyring.gatewayJwt === undefined) {
-        return { [CAIL_IDENTITY_JWT_HEADER]: keyring.appJwt };
-    }
-    if (!isCompactJwsShape(keyring.gatewayJwt)) {
-        throw new TypeError("gatewayJwt is not a compact JWS.");
-    }
-    return {
-        [CAIL_IDENTITY_JWT_HEADER]: keyring.appJwt,
-        [CAIL_GATEWAY_IDENTITY_JWT_HEADER]: keyring.gatewayJwt,
-    };
 }
 /**
  * Verify a keyring's gateway leg before the application stores or forwards
