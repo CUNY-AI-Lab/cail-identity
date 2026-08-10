@@ -14,8 +14,8 @@ import {
 } from "./fixtures.js";
 
 const NOW = 1_000_000;
-const ISS = "https://tools.ailab.gc.cuny.edu/cail-sso";
-const OTHER_ISS = "https://tools.cuny.qzz.io/cail-sso";
+const ISS = "https://issuer.example/cail-sso";
+const OTHER_ISS = "https://other-issuer.example/cail-sso";
 const AUD = "cail-internal";
 const OPTS = { expectedAudience: AUD, allowedIssuers: [ISS], now: NOW };
 
@@ -308,7 +308,7 @@ describe("verifyIdentityJwt audience, issuer, and subject", () => {
     expect(await verify(await mintRsaJwt(claims({ iss }), oldKey))).toBeNull();
   });
 
-  it("snapshots one exact issuer even when the authority supports prod and staging", async () => {
+  it("snapshots one exact issuer from an explicitly supplied authority", async () => {
     const opts = { ...OPTS, allowedIssuers: [ISS, OTHER_ISS] };
     expect(
       await verify(await mintRsaJwt(claims(), oldKey), oldKey.jwks, opts),

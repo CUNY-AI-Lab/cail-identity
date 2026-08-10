@@ -2,7 +2,6 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import {
   CAIL_CANONICAL_ISSUER,
-  CAIL_STAGING_ISSUER,
   loadIdentityVerifierConfig,
   verifyIdentityJwt,
   type IdentityVerifierConfig,
@@ -12,7 +11,7 @@ import { makeRsaFixture, mintRsaJwt, type RsaFixture } from "./fixtures.js";
 
 const NOW = 1_000_000;
 const ISS = CAIL_CANONICAL_ISSUER;
-const OTHER_ISS = CAIL_STAGING_ISSUER;
+const OTHER_ISS = "https://test-issuer.example/cail-sso";
 const AUD = "cail-internal";
 const MAX_JWKS_JSON_DEPTH = 64;
 
@@ -104,7 +103,7 @@ describe("loadIdentityVerifierConfig happy path", () => {
     }
   });
 
-  it("loads staging only when it belongs to the configured authority", async () => {
+  it("loads an additional issuer only when the caller explicitly trusts it", async () => {
     const result = await load({
       issuer: OTHER_ISS,
       supportedIssuers: [ISS, OTHER_ISS],
@@ -325,9 +324,9 @@ describe("loadIdentityVerifierConfig issuer authority", () => {
     `${ISS}\u0000`,
     `${ISS}?query=1`,
     `${ISS}#fragment`,
-    "http://tools.ailab.gc.cuny.edu/cail-sso",
+    "http://issuer.example/cail-sso",
     "https://TOOLS.AILAB.GC.CUNY.EDU/cail-sso",
-    "https://user@tools.ailab.gc.cuny.edu/cail-sso",
+    "https://user@issuer.example/cail-sso",
   ])("rejects noncanonical issuer %j", async (issuer) => {
     await expect(load({ issuer })).resolves.toEqual({
       ok: false,

@@ -149,7 +149,7 @@ reads each input option once and returns either a frozen verifier snapshot or
 a typed operator-error reason. It requires one canonical HTTPS issuer, one
 non-whitespace scalar audience, finite representable test time when supplied,
 clock tolerance from 0 through 300 seconds, and a nonempty JWKS. The default
-issuer authority contains only the canonical production and staging issuers;
+issuer authority contains only the canonical standalone Doorway issuer;
 callers may supply an exact canonical authority list.
 
 Every JWKS key must be an eligible public RSA RS256 signing key with canonical
@@ -195,7 +195,7 @@ const loaded = await loadIdentityVerifierConfig({
   jwks: env.CAIL_IDENTITY_JWKS,
   issuer: env.CAIL_IDENTITY_ISSUER,
   expectedAudience: "cail:agent-studio",
-  supportedIssuers: [CAIL_CANONICAL_ISSUER, CAIL_STAGING_ISSUER], // optional
+  supportedIssuers: [CAIL_CANONICAL_ISSUER], // optional
 });
 if (!loaded.ok) {
   // Includes JWKS, issuer, audience, and timing config-error reasons.

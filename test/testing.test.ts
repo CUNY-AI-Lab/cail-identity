@@ -12,7 +12,6 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import {
   CAIL_CANONICAL_ISSUER,
-  CAIL_STAGING_ISSUER,
   deriveCailSubject,
   isCailSubject,
   loadIdentityVerifierConfig,
@@ -39,6 +38,7 @@ async function configFor(
     jwks: issuer.jwksJson,
     issuer: issuer.issuer,
     expectedAudience,
+    supportedIssuers: [issuer.issuer],
     now,
   });
   if (!result.ok) throw new Error(`fixture config failed: ${result.reason}`);
@@ -154,7 +154,7 @@ describe("createTestIdentityIssuer", () => {
     expect(identity?.entitlements).toEqual(["tools"]);
   });
 
-  it("defaults to the canonical production issuer and exposes JWKS as object and JSON", async () => {
+  it("defaults to the canonical standalone issuer and exposes JWKS as object and JSON", async () => {
     expect(issuer.issuer).toBe(CAIL_CANONICAL_ISSUER);
     expect(JSON.parse(issuer.jwksJson)).toEqual(issuer.jwks);
     expect(issuer.jwks.keys).toHaveLength(1);
@@ -162,23 +162,23 @@ describe("createTestIdentityIssuer", () => {
   });
 
   it("honors subject / issuer / time overrides (and fail-closed paths stay reachable)", async () => {
-    const staging = await createTestIdentityIssuer({
-      kid: "staging-key",
-      issuer: CAIL_STAGING_ISSUER,
+    const alternate = await createTestIdentityIssuer({
+      kid: "alternate-key",
+      issuer: "https://test-issuer.example/cail-sso",
     });
     const now = 1_000_000;
-    const token = await staging.mintIdentityJwt({
+    const token = await alternate.mintIdentityJwt({
       audience: AUD,
       subject: TEST_SUBJECTS.bob,
       now,
       expiresInSeconds: 60,
     });
-    const activeConfig = await configFor(staging, AUD, now + 30);
+    const activeConfig = await configFor(alternate, AUD, now + 30);
     await expect(
       verifyIdentityJwt(token, activeConfig),
     ).resolves.toMatchObject({ subject: TEST_SUBJECTS.bob });
     // Expired by the verifier's clock → null.
-    const expiredConfig = await configFor(staging, AUD, now + 3600);
+    const expiredConfig = await configFor(alternate, AUD, now + 3600);
     await expect(
       verifyIdentityJwt(token, expiredConfig),
     ).resolves.toBeNull();

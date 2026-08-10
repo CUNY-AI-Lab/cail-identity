@@ -331,10 +331,9 @@ export async function deriveAppSubject(
   return `app-${bytesToHex(digest).slice(0, 32)}`;
 }
 
-/** Canonical production issuer — include it in `supportedIssuers` to accept prod. */
-export const CAIL_CANONICAL_ISSUER = "https://tools.ailab.gc.cuny.edu/cail-sso";
-/** Staging issuer — include it in `supportedIssuers` to accept staging. */
-export const CAIL_STAGING_ISSUER = "https://tools.cuny.qzz.io/cail-sso";
+/** Canonical issuer for every standalone CAIL environment. */
+export const CAIL_CANONICAL_ISSUER =
+  "https://cail-doorway.ailab-452.workers.dev/cail-sso";
 
 // fatal:true — RFC 7519 §7.2 / RFC 8725 §3.7 require the header and payload
 // to be valid UTF-8 JSON. The default lenient decoder would smuggle invalid
@@ -571,7 +570,7 @@ export interface LoadIdentityVerifierConfigInput {
   expectedAudience: string | undefined;
   /**
    * Optional exact-match authority for acceptable configured issuers.
-   * Defaults to CAIL's canonical production and staging issuers.
+   * Defaults to CAIL's one canonical standalone Doorway issuer.
    */
   supportedIssuers?: readonly string[];
   /** Test-only fixed Unix time. Production callers should omit this. */
@@ -735,7 +734,7 @@ export async function loadIdentityVerifierConfig(
 
   let supportedIssuers: string[];
   if (raw.supportedIssuers === undefined) {
-    supportedIssuers = [CAIL_CANONICAL_ISSUER, CAIL_STAGING_ISSUER];
+    supportedIssuers = [CAIL_CANONICAL_ISSUER];
   } else {
     const snapshot = snapshotStringArray(raw.supportedIssuers);
     if (
