@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   CAIL_GATEWAY_AUDIENCE,
-  CAIL_MODEL_SCOPES,
   loadIdentityVerifierConfig,
   readIdentityKeyring,
+  verifyIdentityJwt,
   verifyKeyringGatewayJwt,
 } from "../src/index";
 import {
@@ -24,15 +24,28 @@ async function keyringFixture() {
   const gatewayJwt = await issuer.mintIdentityJwt({
     audience: CAIL_GATEWAY_AUDIENCE,
     subject: TEST_SUBJECTS.alice,
-    gatewayAccess: { scopes: CAIL_MODEL_SCOPES, budgetScope: "person" },
   });
-  const loaded = await loadIdentityVerifierConfig({
-    jwks: issuer.jwksJson,
-    issuer: issuer.issuer,
-    expectedAudience: CAIL_GATEWAY_AUDIENCE,
-  });
-  if (!loaded.ok) throw new Error(loaded.reason);
-  return { issuer, appJwt, gatewayJwt, gatewayConfig: loaded.config };
+  const [gatewayLoaded, appLoaded] = await Promise.all([
+    loadIdentityVerifierConfig({
+      jwks: issuer.jwksJson,
+      issuer: issuer.issuer,
+      expectedAudience: CAIL_GATEWAY_AUDIENCE,
+    }),
+    loadIdentityVerifierConfig({
+      jwks: issuer.jwksJson,
+      issuer: issuer.issuer,
+      expectedAudience: APP_AUDIENCE,
+    }),
+  ]);
+  if (!gatewayLoaded.ok) throw new Error(gatewayLoaded.reason);
+  if (!appLoaded.ok) throw new Error(appLoaded.reason);
+  return {
+    issuer,
+    appJwt,
+    gatewayJwt,
+    gatewayConfig: gatewayLoaded.config,
+    appConfig: appLoaded.config,
+  };
 }
 
 describe("identity keyring transport", () => {
@@ -79,14 +92,27 @@ describe("identity keyring transport", () => {
     expect(readIdentityKeyring(headers)).toBeNull();
   });
 
-  it("verifies a matching gateway leg to the app-leg subject", async () => {
-    const { appJwt, gatewayJwt, gatewayConfig } = await keyringFixture();
+  it("verifies and forwards matching Site/Agent-style app and Gateway legs", async () => {
+    const { appJwt, gatewayJwt, appConfig, gatewayConfig } =
+      await keyringFixture();
+    const appIdentity = await verifyIdentityJwt(appJwt, appConfig);
+    expect(appIdentity?.subject).toBe(TEST_SUBJECTS.alice);
+
+    const keyring = readIdentityKeyring(
+      new Headers({
+        [APP_JWT_HEADER]: appJwt,
+        [GATEWAY_JWT_HEADER]: gatewayJwt,
+      }),
+    );
+    expect(keyring).not.toBeNull();
+    if (keyring === null) throw new Error("keyring fixture failed");
     const identity = await verifyKeyringGatewayJwt(
-      { appJwt, gatewayJwt },
+      keyring,
       gatewayConfig,
-      TEST_SUBJECTS.alice,
+      appIdentity!.subject,
     );
     expect(identity?.subject).toBe(TEST_SUBJECTS.alice);
+    expect(keyring.gatewayJwt).toBe(gatewayJwt);
   });
 
   it("returns null for an absent gateway leg", async () => {
@@ -101,7 +127,6 @@ describe("identity keyring transport", () => {
     const bobGateway = await issuer.mintIdentityJwt({
       audience: CAIL_GATEWAY_AUDIENCE,
       subject: TEST_SUBJECTS.bob,
-      gatewayAccess: { scopes: CAIL_MODEL_SCOPES, budgetScope: "person" },
     });
     expect(
       await verifyKeyringGatewayJwt(
@@ -144,7 +169,6 @@ describe("identity keyring transport", () => {
     const expired = await issuer.mintIdentityJwt({
       audience: CAIL_GATEWAY_AUDIENCE,
       subject: TEST_SUBJECTS.alice,
-      gatewayAccess: { scopes: CAIL_MODEL_SCOPES, budgetScope: "person" },
       now: Math.floor(Date.now() / 1_000) - 3_600,
       expiresInSeconds: 1,
     });
