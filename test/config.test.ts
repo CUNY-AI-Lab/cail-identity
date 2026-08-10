@@ -14,6 +14,7 @@ const NOW = 1_000_000;
 const ISS = CAIL_CANONICAL_ISSUER;
 const OTHER_ISS = CAIL_STAGING_ISSUER;
 const AUD = "cail-internal";
+const MAX_JWKS_JSON_DEPTH = 64;
 
 let key: RsaFixture;
 let otherKey: RsaFixture;
@@ -49,6 +50,21 @@ async function mustLoad(
   const result = await load(over);
   if (!result.ok) throw new Error(`fixture config failed: ${result.reason}`);
   return result.config;
+}
+
+function valueAtJwksDepth(depth: number): unknown {
+  let value: unknown = "ignored metadata";
+  for (let current = 1; current < depth; current += 1) {
+    value = [value];
+  }
+  return value;
+}
+
+function jwksWithMetadataAtDepth(depth: number): string {
+  return JSON.stringify({
+    keys: [key.publicJwk],
+    metadata: valueAtJwksDepth(depth),
+  });
 }
 
 describe("loadIdentityVerifierConfig happy path", () => {
@@ -126,14 +142,41 @@ describe("loadIdentityVerifierConfig JWKS errors", () => {
     });
   });
 
-  it("owns deeply nested JWKS JSON instead of throwing during snapshot freeze", async () => {
-    const depth = 30_000;
+  it.each([
+    [MAX_JWKS_JSON_DEPTH - 1, true],
+    [MAX_JWKS_JSON_DEPTH, true],
+    [MAX_JWKS_JSON_DEPTH + 1, false],
+  ])(
+    "enforces the iterative JWKS JSON depth boundary at %i",
+    async (depth, accepted) => {
+      const result = await load({ jwks: jwksWithMetadataAtDepth(depth) });
+      expect(result.ok).toBe(accepted);
+    },
+  );
+
+  it("rejects very deep unknown metadata without a stack-dependent walk", async () => {
+    const depth = 5_000;
     const nested = `${"[".repeat(depth)}0${"]".repeat(depth)}`;
     const jwks = `{"keys":[${JSON.stringify(key.publicJwk)}],"metadata":${nested}}`;
     await expect(load({ jwks })).resolves.toEqual({
       ok: false,
       reason: "jwks_malformed",
     });
+  });
+
+  it("accepts wide ordinary unknown metadata", async () => {
+    const metadata = Object.fromEntries(
+      Array.from({ length: 1_000 }, (_, index) => [`extension_${index}`, index]),
+    );
+    await expect(
+      load({
+        jwks: JSON.stringify({
+          keys: [key.publicJwk],
+          metadata,
+          "urn:example:extension": { enabled: true },
+        }),
+      }),
+    ).resolves.toMatchObject({ ok: true });
   });
 
   it("requires a nonempty distinct kid on every eligible public RS256 key", async () => {
