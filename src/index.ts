@@ -362,6 +362,10 @@ interface InspectedJwt {
 const MAX_CLOCK_TOLERANCE_SECONDS = 300;
 const MAX_DATE_SECONDS = 8_640_000_000_000;
 const MIN_RSA_MODULUS_BITS = 2048;
+// JSON root is depth 0; each object member or array index adds one. Values at
+// depth 65 are malformed. This bound is checked iteratively so it does not
+// depend on the JavaScript engine's call stack.
+const MAX_JWKS_JSON_DEPTH = 64;
 
 function isCanonicalBase64url(value: unknown): value is string {
   if (typeof value !== "string" || value === "") return false;
@@ -642,12 +646,31 @@ function isValidAudience(value: unknown): value is string {
   );
 }
 
-function freezeJsonValue(value: unknown): void {
-  if (typeof value !== "object" || value === null || Object.isFrozen(value)) {
-    return;
+function isWithinJwksJsonDepth(value: unknown): boolean {
+  const pending: Array<{ value: unknown; depth: number }> = [
+    { value, depth: 0 },
+  ];
+  while (pending.length > 0) {
+    const current = pending.pop()!;
+    if (current.depth > MAX_JWKS_JSON_DEPTH) return false;
+    if (typeof current.value !== "object" || current.value === null) continue;
+
+    const childDepth = current.depth + 1;
+    if (Array.isArray(current.value)) {
+      for (let index = current.value.length - 1; index >= 0; index -= 1) {
+        pending.push({ value: current.value[index], depth: childDepth });
+      }
+      continue;
+    }
+
+    const record = current.value as Record<string, unknown>;
+    const keys = Object.keys(record);
+    for (let index = keys.length - 1; index >= 0; index -= 1) {
+      const key = keys[index]!;
+      pending.push({ value: record[key], depth: childDepth });
+    }
   }
-  for (const child of Object.values(value)) freezeJsonValue(child);
-  Object.freeze(value);
+  return true;
 }
 
 /**
@@ -676,6 +699,9 @@ export async function loadIdentityVerifierConfig(
   try {
     parsedJwks = JSON.parse(raw.jwks);
   } catch {
+    return { ok: false, reason: "jwks_malformed" };
+  }
+  if (!isWithinJwksJsonDepth(parsedJwks)) {
     return { ok: false, reason: "jwks_malformed" };
   }
   if (!isPlainObject(parsedJwks)) {
@@ -749,11 +775,10 @@ export async function loadIdentityVerifierConfig(
     return { ok: false, reason: "timing_invalid" };
   }
 
-  try {
-    freezeJsonValue(parsedJwks);
-  } catch {
-    return { ok: false, reason: "jwks_malformed" };
-  }
+  // JSON.parse returns local own-data values. Only validated key snapshots are
+  // read below, and the parsed JWKS is never exposed through the config, so
+  // recursively freezing ignored metadata would add work without protecting
+  // the immutable verifier snapshot.
   const keysByKid = new Map<string, CryptoKey>();
   try {
     for (const { key, kid } of keyRecords) {
