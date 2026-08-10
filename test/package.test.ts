@@ -2,7 +2,6 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { readFile } from "node:fs/promises";
 import {
   CAIL_CANONICAL_ISSUER,
-  CAIL_STAGING_ISSUER,
   deriveAppSubject,
   deriveCailSubject,
   isAppSubject,
@@ -51,9 +50,8 @@ describe("published package entry", () => {
     expect(deriveAppSubject).toBeTypeOf("function");
     expect(isAppSubject).toBeTypeOf("function");
     expect(CAIL_CANONICAL_ISSUER).toBe(
-      "https://tools.ailab.gc.cuny.edu/cail-sso",
+      "https://cail-doorway.ailab-452.workers.dev/cail-sso",
     );
-    expect(CAIL_STAGING_ISSUER).toBe("https://tools.cuny.qzz.io/cail-sso");
   });
 
   it("publishes to GitHub Packages under the @cuny-ai-lab scope", () => {
