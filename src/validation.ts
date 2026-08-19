@@ -4,7 +4,6 @@ const BOOLEAN_SCHEMA = z.boolean();
 const CALLABLE_SCHEMA = z.function();
 const NUMBER_SCHEMA = z.number();
 const STRING_SCHEMA = z.string();
-const UNKNOWN_ARRAY_SCHEMA = z.array(z.unknown());
 
 type RuntimeProperty =
   | bigint
@@ -38,18 +37,18 @@ export function stringFrom<Value>(value: Value): string | undefined {
 
 export function unknownArrayFrom<Value>(value: Value) {
   try {
-    // `z.array` snapshots values, but it intentionally accepts inherited
-    // elements and turns holes into `undefined`. Check the caller-owned array
-    // first so the boundary retains the dense own-element contract.
     if (!Array.isArray(value)) return undefined;
     const length = value.length;
-    if (!Number.isSafeInteger(length) || length < 1) return undefined;
+    if (!Number.isSafeInteger(length)) return undefined;
+    const snapshot: RuntimeProperty[] = [];
     for (let index = 0; index < length; index += 1) {
-      if (!Object.hasOwn(value, index)) return undefined;
+      const descriptor = Object.getOwnPropertyDescriptor(value, index);
+      if (descriptor === undefined) return undefined;
+      snapshot.push(
+        "value" in descriptor ? descriptor.value : descriptor.get?.call(value),
+      );
     }
-
-    const result = UNKNOWN_ARRAY_SCHEMA.safeParse(value);
-    return result.success ? result.data : undefined;
+    return snapshot;
   } catch {
     return undefined;
   }
