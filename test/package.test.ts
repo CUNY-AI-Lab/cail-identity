@@ -8,25 +8,36 @@ import {
   isCailSubject,
   loadIdentityVerifierConfig,
   verifyIdentityJwt,
+  type LoadIdentityVerifierConfigInput,
 } from "@cuny-ai-lab/cail-identity";
-import { makeRsaFixture, mintRsaJwt, type RsaFixture } from "./fixtures.js";
+import {
+  makeRsaFixture,
+  mintRsaJwt,
+  type JsonObject,
+  type JsonValue,
+  type RsaFixture,
+} from "./fixtures.js";
 
 const NOW = 1_000_000;
 const AUD = "cail:package-test";
 
 let fixture: RsaFixture;
-let packageMetadata: Record<string, unknown>;
+let packageMetadata: JsonObject;
 
 beforeAll(async () => {
   [fixture, packageMetadata] = await Promise.all([
     makeRsaFixture("package-entry"),
     readFile(new URL("../package.json", import.meta.url), "utf8").then(
-      (value) => JSON.parse(value) as Record<string, unknown>,
+      (value) => {
+        // SAFETY: package.json is the checked-in package manifest and this
+        // test reads only its JSON object metadata fields below.
+        return JSON.parse(value) as JsonObject;
+      },
     ),
   ]);
 });
 
-function claims(aud: unknown = AUD) {
+function claims(aud: JsonValue = AUD): JsonObject {
   return {
     sub: "cail-fedcba9876543210fedcba9876543210",
     aud,
@@ -35,7 +46,7 @@ function claims(aud: unknown = AUD) {
   };
 }
 
-function jwksWith(overrides: Record<string, unknown>): string {
+function jwksWith(overrides: JsonObject): string {
   return JSON.stringify({
     keys: [{ ...fixture.publicJwk, ...overrides }],
   });
@@ -214,7 +225,7 @@ describe("published package entry", () => {
 
   it("reads hostile config getters once through the package entry", async () => {
     const counts = new Map<string, number>();
-    const first: Record<string, unknown> = {
+    const first: JsonObject = {
       jwks: JSON.stringify(fixture.jwks),
       issuer: CAIL_CANONICAL_ISSUER,
       expectedAudience: AUD,
@@ -222,7 +233,9 @@ describe("published package entry", () => {
       now: NOW,
       clockToleranceSeconds: 0,
     };
-    const hostile = Object.create(null) as Record<string, unknown>;
+    // SAFETY: the null-prototype object is populated with all required config
+    // accessors immediately below to exercise the snapshot boundary.
+    const hostile = Object.create(null) as LoadIdentityVerifierConfigInput;
     for (const [name, value] of Object.entries(first)) {
       Object.defineProperty(hostile, name, {
         enumerable: true,
@@ -235,7 +248,7 @@ describe("published package entry", () => {
     }
 
     await expect(
-      loadIdentityVerifierConfig(hostile as never),
+      loadIdentityVerifierConfig(hostile),
     ).resolves.toMatchObject({ ok: true });
     expect(Object.fromEntries(counts)).toEqual({
       jwks: 1,

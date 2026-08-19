@@ -342,13 +342,21 @@ separately keyed `log_sub` claim used by operational event producers.
 
 ```bash
 bun install
-bun run check
+bun run verify
 bun audit
 ```
 
-`bun run check` builds the package, runs the TypeScript and standalone LuaJIT
-derivation tests, and checks the package contents. The build output ships in
-the published package, so consumers install without a build step.
+`bun run verify` first runs the vendored full generic
+[anti-slop](https://github.com/dmmulroy/anti-slop) profile, then builds the
+package, runs the TypeScript and standalone LuaJIT derivation tests, and checks
+the package contents. Resolve lint findings at the parsing or contract
+boundary; do not suppress them, hide them behind generic wrappers, or add a
+`SAFETY` comment unless it names the runtime invariant established immediately
+before the assertion. The vendored source and upstream commit are recorded in
+[`tools/oxlint/anti-slop/UPSTREAM.md`](tools/oxlint/anti-slop/UPSTREAM.md).
+
+`bun run check` runs the package checks without linting. The build output ships
+in the published package, so consumers install without a build step.
 Publishing a stable (non-prerelease) GitHub release whose tag matches `v` plus
 the package version publishes that release source to GitHub Packages with the
 repository's workflow token. Package publication does not update a production

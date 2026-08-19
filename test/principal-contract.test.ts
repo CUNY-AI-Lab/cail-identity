@@ -7,12 +7,14 @@ import {
   isCailSubject,
 } from "../src/index.js";
 
+// SAFETY: this checked-in contract fixture is parsed only for its declared
+// pattern/examples fields; the test asserts both values immediately below.
 const contract = JSON.parse(
   readFileSync(
     new URL("../contract/principal-v1.json", import.meta.url),
     "utf8",
   ),
-) as {
+  ) as {
   oneOf: Array<{ pattern: string }>;
   examples: string[];
 };

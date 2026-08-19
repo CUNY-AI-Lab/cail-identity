@@ -16,6 +16,16 @@ export interface RsaFixture {
   jwks: JSONWebKeySet;
 }
 
+export type JsonValue =
+  | boolean
+  | null
+  | number
+  | string
+  | JsonValue[]
+  | { [key: string]: JsonValue }
+  | undefined;
+export type JsonObject = { [key: string]: JsonValue };
+
 export async function makeRsaFixture(kid: string): Promise<RsaFixture> {
   const { privateKey, publicKey } = await generateKeyPair("RS256", {
     extractable: true,
@@ -31,9 +41,9 @@ export async function makeRsaFixture(kid: string): Promise<RsaFixture> {
 }
 
 export async function mintRsaJwt(
-  claims: Record<string, unknown>,
+  claims: JsonObject,
   fixture: RsaFixture,
-  header: Record<string, unknown> = {},
+  header: JsonObject = {},
 ): Promise<string> {
   return new SignJWT(claims)
     .setProtectedHeader({ alg: "RS256", kid: fixture.kid, ...header })
@@ -49,6 +59,6 @@ export async function signRawRsaPayload(
     .sign(fixture.privateKey);
 }
 
-export function encodeJson(value: unknown): string {
+export function encodeJson<Value>(value: Value): string {
   return base64url.encode(new TextEncoder().encode(JSON.stringify(value)));
 }

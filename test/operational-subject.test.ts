@@ -56,7 +56,15 @@ describe("operational identity pseudonym", () => {
       oidcSubject: "ALICE@login.cuny.edu",
       operationalSubjectSalt: "operational-salt-at-least-32-bytes",
     };
-    const hostile = Object.create(null) as Record<string, unknown>;
+    // SAFETY: the null-prototype object is populated with the exact
+    // operational derivation option accessors immediately below.
+    const hostile = Object.create(null) as {
+      issuer: string;
+      oidcSubject: string;
+      operationalSubjectSalt: string;
+    };
+    // SAFETY: Object.keys(valid) contains exactly the three option names used
+    // by the accessor map below.
     for (const name of Object.keys(valid) as Array<keyof typeof valid>) {
       Object.defineProperty(hostile, name, {
         enumerable: true,
@@ -67,13 +75,9 @@ describe("operational identity pseudonym", () => {
       });
     }
     const expected = await deriveCailOperationalSubject(valid);
-    await expect(
-      deriveCailOperationalSubject(
-        hostile as unknown as Parameters<
-          typeof deriveCailOperationalSubject
-        >[0],
-      ),
-    ).resolves.toBe(expected);
+    // SAFETY: hostile has all operational derivation properties installed as
+    // accessors above; the test intentionally changes their second read.
+    await expect(deriveCailOperationalSubject(hostile)).resolves.toBe(expected);
     expect(reads).toEqual({
       issuer: 1,
       oidcSubject: 1,

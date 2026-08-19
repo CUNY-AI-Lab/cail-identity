@@ -51,8 +51,10 @@ describe("stable CAIL app-principal subject", () => {
     await expect(deriveAppSubject("ctl\u0001id", salt)).rejects.toThrow(
       "appId",
     );
+    // SAFETY: this deliberately injects a non-string runtime value to exercise
+    // the public app-id validation boundary.
     await expect(
-      deriveAppSubject(undefined as unknown as string, salt),
+      deriveAppSubject(undefined as never, salt),
     ).rejects.toThrow("appId");
     await expect(deriveAppSubject("kale:widget", "")).rejects.toThrow(
       "subjectSalt",

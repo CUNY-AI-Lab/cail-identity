@@ -28,6 +28,11 @@ import { SignJWT, exportJWK, generateKeyPair, type JSONWebKeySet, type JWK } fro
 import {
   CAIL_CANONICAL_ISSUER,
 } from "./index.js";
+import {
+  plainRecordFrom,
+  stringFrom,
+  unknownArrayFrom,
+} from "./validation.js";
 
 // ---------------------------------------------------------------------------
 // Deterministic canonical test subjects
@@ -145,7 +150,7 @@ const SHA256_ROUND_CONSTANTS = Uint32Array.from([
  * `deriveCailSubject`.
  */
 export function canonicalTestSubject(seed: string): string {
-  if (typeof seed !== "string") {
+  if (stringFrom(seed) === undefined) {
     throw new TypeError("canonicalTestSubject seed must be a string.");
   }
   return `cail-${sha256Hex(seed).slice(0, 32)}`;
@@ -215,8 +220,18 @@ export interface MintTestIdentityJwtOptions {
    * `{ alg: "RS256", kid, typ: "JWT" }`; genuinely malformed shapes
    * (alg tampering, wrong-key signatures) are intentionally out of scope.
    */
-  claims?: Record<string, unknown>;
+  claims?: TestClaimRecord;
 }
+
+export type TestClaimValue =
+  | boolean
+  | null
+  | number
+  | string
+  | TestClaimValue[]
+  | { [key: string]: TestClaimValue }
+  | undefined;
+export type TestClaimRecord = { [key: string]: TestClaimValue };
 
 export interface TestIdentityIssuer {
   /** The key id present in both the JWKS and every minted token header. */
@@ -269,13 +284,15 @@ export async function createTestIdentityIssuer(options?: {
     jwks,
     jwksJson: JSON.stringify(jwks),
     async mintIdentityJwt(mint: MintTestIdentityJwtOptions): Promise<string> {
-      if (typeof mint !== "object" || mint === null) {
+      if (plainRecordFrom(mint) === undefined) {
         throw new TypeError("mintIdentityJwt requires an options object.");
       }
+      const audienceText = stringFrom(mint.audience);
+      const audienceArray = unknownArrayFrom(mint.audience);
       const audienceOk =
-        (typeof mint.audience === "string" && mint.audience !== "") ||
-        (Array.isArray(mint.audience) &&
-          mint.audience.every((entry) => typeof entry === "string"));
+        (audienceText !== undefined && audienceText !== "") ||
+        (audienceArray !== undefined &&
+          audienceArray.every((entry) => stringFrom(entry) !== undefined));
       if (!audienceOk) {
         throw new TypeError(
           "mintIdentityJwt requires `audience`: a non-empty string (the `aud` your verifier expects) or a string array (the array-`aud` shape verifiers must reject).",
@@ -283,32 +300,25 @@ export async function createTestIdentityIssuer(options?: {
       }
       if (
         mint.claims !== undefined &&
-        (typeof mint.claims !== "object" ||
-          mint.claims === null ||
-          Array.isArray(mint.claims))
+        plainRecordFrom(mint.claims) === undefined
       ) {
         throw new TypeError(
           "mintIdentityJwt `claims` must be a plain object of claim overrides.",
         );
       }
       const now = mint.now ?? Math.floor(Date.now() / 1000);
-      const payload: Record<string, unknown> = {
-        iss: mint.issuer ?? issuer,
-        aud: mint.audience,
-        sub: mint.subject ?? TEST_SUBJECTS.alice,
-        ...(mint.operationalSubject !== undefined
-          ? { log_sub: mint.operationalSubject }
-          : {}),
-        iat: now,
-        exp: now + (mint.expiresInSeconds ?? 3600),
-        ...(mint.email !== undefined ? { email: mint.email } : {}),
-        ...(mint.name !== undefined ? { name: mint.name } : {}),
-        ...(mint.entitlements !== undefined
-          ? { entitlements: mint.entitlements }
-          : {}),
-        ...(mint.authTime !== undefined ? { auth_time: mint.authTime } : {}),
-        ...(mint.notBefore !== undefined ? { nbf: mint.notBefore } : {}),
-      };
+      const payload: TestClaimRecord = {};
+      payload.iss = mint.issuer ?? issuer;
+      payload.aud = mint.audience;
+      payload.sub = mint.subject ?? TEST_SUBJECTS.alice;
+      payload.iat = now;
+      payload.exp = now + (mint.expiresInSeconds ?? 3600);
+      if (mint.operationalSubject !== undefined) payload.log_sub = mint.operationalSubject;
+      if (mint.email !== undefined) payload.email = mint.email;
+      if (mint.name !== undefined) payload.name = mint.name;
+      if (mint.entitlements !== undefined) payload.entitlements = mint.entitlements;
+      if (mint.authTime !== undefined) payload.auth_time = mint.authTime;
+      if (mint.notBefore !== undefined) payload.nbf = mint.notBefore;
       if (mint.claims !== undefined) {
         for (const [claim, value] of Object.entries(mint.claims)) {
           if (value === undefined) delete payload[claim];
