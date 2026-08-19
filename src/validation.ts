@@ -57,15 +57,13 @@ export function unknownArrayFrom<Value>(value: Value) {
 
 export function plainRecordFrom<Value>(value: Value) {
   try {
-    if (value === null || Object(value) !== value || Array.isArray(value)) {
-      return undefined;
-    }
-    // SAFETY: identity under Object coercion establishes that the original
-    // value is an object or function; the prototype check below rejects
-    // functions and class instances.
-    const owner = value as object;
-    const prototype = Object.getPrototypeOf(owner);
+    if (value === null || Array.isArray(value)) return undefined;
+    const prototype = Object.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) return undefined;
+    // SAFETY: an exact Object/null prototype establishes the plain-record
+    // owner consumed below; primitives, functions, and class instances have
+    // already been rejected without reading caller-controlled properties.
+    const owner = value as object;
     return Object.freeze({
       owner,
       has(key: string): boolean {
