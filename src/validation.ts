@@ -37,8 +37,22 @@ export function stringFrom<Value>(value: Value): string | undefined {
 }
 
 export function unknownArrayFrom<Value>(value: Value) {
-  const result = UNKNOWN_ARRAY_SCHEMA.safeParse(value);
-  return result.success ? result.data : undefined;
+  try {
+    // `z.array` snapshots values, but it intentionally accepts inherited
+    // elements and turns holes into `undefined`. Check the caller-owned array
+    // first so the boundary retains the dense own-element contract.
+    if (!Array.isArray(value)) return undefined;
+    const length = value.length;
+    if (!Number.isSafeInteger(length) || length < 1) return undefined;
+    for (let index = 0; index < length; index += 1) {
+      if (!Object.hasOwn(value, index)) return undefined;
+    }
+
+    const result = UNKNOWN_ARRAY_SCHEMA.safeParse(value);
+    return result.success ? result.data : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function plainRecordFrom<Value>(value: Value) {

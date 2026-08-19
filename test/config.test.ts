@@ -373,6 +373,20 @@ describe("loadIdentityVerifierConfig issuer authority", () => {
       load({ supportedIssuers: values }),
     ).resolves.toEqual({ ok: false, reason: "issuer_unsupported" });
   });
+
+  it("rejects sparse and inherited supported issuer elements", async () => {
+    const sparse = Array<string>(1);
+    await expect(
+      load({ supportedIssuers: sparse }),
+    ).resolves.toEqual({ ok: false, reason: "issuer_unsupported" });
+
+    const inherited = [ISS];
+    delete inherited[0];
+    Object.setPrototypeOf(inherited, { 0: ISS });
+    await expect(
+      load({ supportedIssuers: inherited }),
+    ).resolves.toEqual({ ok: false, reason: "issuer_unsupported" });
+  });
 });
 
 describe("loadIdentityVerifierConfig audience and timing", () => {
