@@ -7,7 +7,13 @@ import {
   type IdentityVerifierConfig,
   type LoadIdentityVerifierConfigInput,
 } from "../src/index.js";
-import { makeRsaFixture, mintRsaJwt, type RsaFixture } from "./fixtures.js";
+import {
+  makeRsaFixture,
+  mintRsaJwt,
+  type JsonObject,
+  type JsonValue,
+  type RsaFixture,
+} from "./fixtures.js";
 
 const NOW = 1_000_000;
 const ISS = CAIL_CANONICAL_ISSUER;
@@ -25,34 +31,42 @@ beforeAll(async () => {
   ]);
 });
 
-function input(
-  over: Partial<LoadIdentityVerifierConfigInput> = {},
-): LoadIdentityVerifierConfigInput {
-  return {
+type ConfigTestOverrides = {
+  jwks?: JsonValue;
+  issuer?: JsonValue;
+  expectedAudience?: JsonValue;
+  supportedIssuers?: JsonValue;
+  now?: JsonValue;
+  clockToleranceSeconds?: JsonValue;
+};
+
+function input(over: ConfigTestOverrides = {}): LoadIdentityVerifierConfigInput {
+  const raw = {
     jwks: JSON.stringify(key.jwks),
     issuer: ISS,
     expectedAudience: AUD,
     now: NOW,
     ...over,
   };
+  // SAFETY: this helper intentionally forwards malformed JSON-shaped values
+  // from negative tests into the public configuration boundary.
+  return raw as LoadIdentityVerifierConfigInput;
 }
 
-async function load(
-  over: Partial<LoadIdentityVerifierConfigInput> = {},
-) {
+async function load(over: ConfigTestOverrides = {}) {
   return loadIdentityVerifierConfig(input(over));
 }
 
-async function mustLoad(
-  over: Partial<LoadIdentityVerifierConfigInput> = {},
-): Promise<IdentityVerifierConfig> {
+async function mustLoad(over: ConfigTestOverrides = {}): Promise<IdentityVerifierConfig> {
   const result = await load(over);
   if (!result.ok) throw new Error(`fixture config failed: ${result.reason}`);
   return result.config;
 }
 
-function valueAtJwksDepth(depth: number): unknown {
-  let value: unknown = "ignored metadata";
+type JwksMetadata = string | JwksMetadata[];
+
+function valueAtJwksDepth(depth: number): JwksMetadata {
+  let value: JwksMetadata = "ignored metadata";
   for (let current = 1; current < depth; current += 1) {
     value = [value];
   }
@@ -117,9 +131,10 @@ describe("loadIdentityVerifierConfig JWKS errors", () => {
   it.each([undefined, "", "   ", "\n\t", 42])(
     "flags unset, blank, or non-string JWKS (%j)",
     async (jwks) => {
-      await expect(
-        load({ jwks: jwks as string | undefined }),
-      ).resolves.toEqual({ ok: false, reason: "jwks_missing" });
+      await expect(load({ jwks })).resolves.toEqual({
+        ok: false,
+        reason: "jwks_missing",
+      });
     },
   );
 
@@ -296,7 +311,9 @@ describe("loadIdentityVerifierConfig JWKS errors", () => {
   });
 
   it("uses parsed own-data JSON and never honors inherited key metadata", async () => {
-    const inherited = Object.create(key.publicJwk) as Record<string, unknown>;
+    // SAFETY: the null-prototype object intentionally inherits key metadata;
+    // this test verifies parsed JSON does not honor that prototype.
+    const inherited = Object.create(key.publicJwk) as { kid: string };
     inherited.kid = key.kid;
     await expect(
       load({ jwks: JSON.stringify({ keys: [inherited] }) }),
@@ -307,14 +324,14 @@ describe("loadIdentityVerifierConfig JWKS errors", () => {
     });
     const result = await load({ jwks: json });
     expect(result.ok).toBe(true);
-    expect(({} as { d?: string }).d).toBeUndefined();
+    expect({ d: undefined }.d).toBeUndefined();
   });
 });
 
 describe("loadIdentityVerifierConfig issuer authority", () => {
   it.each([undefined, "", 7])("flags missing issuer %j", async (issuer) => {
     await expect(
-      load({ issuer: issuer as string | undefined }),
+      load({ issuer }),
     ).resolves.toEqual({ ok: false, reason: "issuer_missing" });
   });
 
@@ -353,7 +370,21 @@ describe("loadIdentityVerifierConfig issuer authority", () => {
     [[`${ISS}/`]],
   ])("rejects malformed supported issuer authority %#", async (values) => {
     await expect(
-      load({ supportedIssuers: values as unknown as string[] }),
+      load({ supportedIssuers: values }),
+    ).resolves.toEqual({ ok: false, reason: "issuer_unsupported" });
+  });
+
+  it("rejects sparse and inherited supported issuer elements", async () => {
+    const sparse = Array<string>(1);
+    await expect(
+      load({ supportedIssuers: sparse }),
+    ).resolves.toEqual({ ok: false, reason: "issuer_unsupported" });
+
+    const inherited = [ISS];
+    delete inherited[0];
+    Object.setPrototypeOf(inherited, { 0: ISS });
+    await expect(
+      load({ supportedIssuers: inherited }),
     ).resolves.toEqual({ ok: false, reason: "issuer_unsupported" });
   });
 });
@@ -370,7 +401,7 @@ describe("loadIdentityVerifierConfig audience and timing", () => {
     "rejects nonscalar or malformed audience %j",
     async (expectedAudience) => {
       await expect(
-        load({ expectedAudience: expectedAudience as unknown as string }),
+        load({ expectedAudience }),
       ).resolves.toEqual({ ok: false, reason: "audience_malformed" });
     },
   );
@@ -425,7 +456,7 @@ describe("loadIdentityVerifierConfig audience and timing", () => {
 describe("immutable snapshots and hostile accessors", () => {
   it("reads every top-level option exactly once and uses those exact values", async () => {
     const counts = new Map<string, number>();
-    const valid: Record<string, unknown> = {
+    const valid: JsonObject = {
       jwks: JSON.stringify(key.jwks),
       issuer: ISS,
       expectedAudience: AUD,
@@ -433,7 +464,7 @@ describe("immutable snapshots and hostile accessors", () => {
       now: NOW,
       clockToleranceSeconds: 0,
     };
-    const later: Record<string, unknown> = {
+    const later: JsonObject = {
       jwks: '{"keys":[]}',
       issuer: "https://evil.example/",
       expectedAudience: ["wrong"],
@@ -441,7 +472,9 @@ describe("immutable snapshots and hostile accessors", () => {
       now: Number.NaN,
       clockToleranceSeconds: 301,
     };
-    const hostile = Object.create(null) as Record<string, unknown>;
+    // SAFETY: the null-prototype object is populated with every required
+    // configuration accessor immediately below.
+    const hostile = Object.create(null) as LoadIdentityVerifierConfigInput;
     for (const name of Object.keys(valid)) {
       Object.defineProperty(hostile, name, {
         enumerable: true,
@@ -453,9 +486,7 @@ describe("immutable snapshots and hostile accessors", () => {
       });
     }
 
-    const result = await loadIdentityVerifierConfig(
-      hostile as unknown as LoadIdentityVerifierConfigInput,
-    );
+    const result = await loadIdentityVerifierConfig(hostile);
     expect(result.ok).toBe(true);
     expect(Object.fromEntries(counts)).toEqual({
       jwks: 1,
@@ -487,9 +518,12 @@ describe("immutable snapshots and hostile accessors", () => {
     const throwing = () => {
       throw new Error("hostile config input");
     };
-    const hostileInput = new Proxy({}, { getOwnPropertyDescriptor: throwing });
+    const hostileInput = new Proxy<LoadIdentityVerifierConfigInput>(
+      { jwks: undefined, issuer: undefined, expectedAudience: undefined },
+      { getOwnPropertyDescriptor: throwing },
+    );
     await expect(
-      loadIdentityVerifierConfig(hostileInput as never),
+      loadIdentityVerifierConfig(hostileInput),
     ).resolves.toEqual({ ok: false, reason: "jwks_missing" });
 
     const hostileAllowlist = new Proxy([ISS], { get: throwing });
@@ -499,6 +533,8 @@ describe("immutable snapshots and hostile accessors", () => {
   });
 
   it("rejects forged verifier objects as configuration misuse, not token failure", async () => {
+    // SAFETY: this object intentionally omits the private brand to verify
+    // forged verifier objects are rejected before token processing.
     await expect(
       verifyIdentityJwt(
         "a.b.c",
@@ -507,7 +543,7 @@ describe("immutable snapshots and hostile accessors", () => {
           issuer: ISS,
           clockToleranceSeconds: 60,
           keyIds: [key.kid],
-        } as unknown as IdentityVerifierConfig,
+        } as never,
       ),
     ).rejects.toThrow("snapshot returned by loadIdentityVerifierConfig");
   });

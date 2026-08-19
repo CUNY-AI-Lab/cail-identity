@@ -20,6 +20,13 @@
 
 import { base64url, importJWK, jwtVerify } from "jose";
 
+import {
+  numberFrom,
+  plainRecordFrom,
+  stringFrom,
+  unknownArrayFrom,
+} from "./validation.js";
+
 export interface CailIdentity {
   subject: string;
   /** Separately keyed pseudonym for privacy-bounded operational events. */
@@ -33,33 +40,39 @@ export interface CailIdentity {
 const CAIL_SUBJECT_PATTERN = /^cail-[0-9a-f]{32}$/;
 
 /** True only for the canonical stable CAIL subject representation. */
-export function isCailSubject(value: unknown): value is string {
-  return typeof value === "string" && CAIL_SUBJECT_PATTERN.test(value);
+export function isCailSubject<Value>(value: Value): value is Value & string {
+  const text = stringFrom(value);
+  return text !== undefined && CAIL_SUBJECT_PATTERN.test(text);
 }
 
 const CUNY_LOGIN_REALM = "@LOGIN.CUNY.EDU";
-const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/;
+function containsControlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
+}
 // ASCII whitespace only — the exact set LuaJIT's `%s` pattern trims in the gate
 // (space, tab, newline, vertical tab, form feed, carriage return).
 const ASCII_WHITESPACE = /^[ \t\n\v\f\r]+|[ \t\n\v\f\r]+$/g;
 const ASCII_WHITESPACE_CHARACTER = /[ \t\n\v\f\r]/;
 const encoder = new TextEncoder();
 
-function snapshotOwnProperty(
-  value: Record<string, unknown>,
-  key: string,
-): unknown {
-  return Object.hasOwn(value, key) ? value[key] : undefined;
+function snapshotOwnProperty<Value>(value: Value, key: string) {
+  const record = plainRecordFrom(value);
+  return record !== undefined && record.has(key) ? record.read(key) : undefined;
 }
 
-function snapshotSubjectSalt(
-  value: unknown,
+function snapshotSubjectSalt<Value>(
+  value: Value,
   optionName: string,
 ): Uint8Array<ArrayBuffer> {
-  const bytes = typeof value === "string" ? encoder.encode(value) : null;
+  const text = stringFrom(value);
+  const bytes = text === undefined ? null : encoder.encode(text);
   if (
-    typeof value !== "string" ||
-    CONTROL_CHARACTER.test(value) ||
+    text === undefined ||
+    containsControlCharacter(text) ||
     bytes === null ||
     bytes.byteLength < 32
   ) {
@@ -76,37 +89,38 @@ interface SubjectDerivationSnapshot {
   saltBytes: Uint8Array<ArrayBuffer>;
 }
 
-function snapshotSubjectDerivationOptions(
-  options: unknown,
+function snapshotSubjectDerivationOptions<Value>(
+  options: Value,
   saltOptionName: "subjectSalt" | "operationalSubjectSalt",
 ): SubjectDerivationSnapshot {
-  let issuer: unknown;
-  let oidcSubject: unknown;
-  let salt: unknown;
+  let issuer: string | undefined;
+  let oidcSubject: string | undefined;
+  let salt: string | undefined;
   try {
-    if (typeof options !== "object" || options === null) {
+    const record = plainRecordFrom(options);
+    if (record === undefined) {
       throw new TypeError("options must be an object.");
     }
-    const record = options as Record<string, unknown>;
-    issuer = snapshotOwnProperty(record, "issuer");
-    oidcSubject = snapshotOwnProperty(record, "oidcSubject");
-    salt = snapshotOwnProperty(record, saltOptionName);
+    issuer = stringFrom(record.read("issuer"));
+    oidcSubject = stringFrom(record.read("oidcSubject"));
+    salt = stringFrom(record.read(saltOptionName));
   } catch {
     throw new TypeError("subject derivation options could not be read.");
   }
 
   if (
-    typeof issuer !== "string" ||
+    issuer === undefined ||
     issuer === "" ||
-    CONTROL_CHARACTER.test(issuer)
+    containsControlCharacter(issuer)
   ) {
     throw new TypeError("issuer must be a non-empty string without controls.");
   }
 
   const saltBytes = snapshotSubjectSalt(salt, saltOptionName);
-  const canonicalSubject = canonicalizeCunySubject(
-    oidcSubject as string,
-  );
+  if (oidcSubject === undefined) {
+    throw new TypeError("CUNY OIDC subject must be a string.");
+  }
+  const canonicalSubject = canonicalizeCunySubject(oidcSubject);
   return { issuer, canonicalSubject, saltBytes };
 }
 
@@ -151,13 +165,10 @@ function encodeSubjectHmacInput(
  * so no real subject changes. It does not authenticate the value.
  */
 function canonicalizeCunySubject(subject: string): string {
-  if (typeof subject !== "string") {
-    throw new TypeError("CUNY OIDC subject must be a string.");
-  }
   // Trim edge ASCII whitespace first (a trailing newline is trimmed, as the
   // gate does), then fail closed on any interior control character.
   const trimmed = subject.replace(ASCII_WHITESPACE, "");
-  if (CONTROL_CHARACTER.test(trimmed)) {
+  if (containsControlCharacter(trimmed)) {
     throw new TypeError("CUNY OIDC subject must not contain control characters.");
   }
   let canonical = trimmed.replace(/[a-z]/g, (ch) => ch.toUpperCase());
@@ -228,8 +239,9 @@ export async function deriveCailSubject(
 const APP_SUBJECT_PATTERN = /^app-[0-9a-f]{32}$/;
 
 /** True only for the canonical stable CAIL app-principal subject. */
-export function isAppSubject(value: unknown): value is string {
-  return typeof value === "string" && APP_SUBJECT_PATTERN.test(value);
+export function isAppSubject<Value>(value: Value): value is Value & string {
+  const text = stringFrom(value);
+  return text !== undefined && APP_SUBJECT_PATTERN.test(text);
 }
 
 /**
@@ -239,18 +251,19 @@ export function isAppSubject(value: unknown): value is string {
  * services still obtain user subjects from a verified identity JWT and app
  * subjects from their trusted control plane.
  */
-export function isCailPrincipalSubject(
-  value: unknown,
-): value is string {
+export function isCailPrincipalSubject<Value>(
+  value: Value,
+): value is Value & string {
   return isCailSubject(value) || isAppSubject(value);
 }
 
 const CAIL_OPERATIONAL_SUBJECT_PATTERN = /^cail-v1-[0-9a-f]{32}$/;
 
-export function isCailOperationalSubject(value: unknown): value is string {
-  return (
-    typeof value === "string" && CAIL_OPERATIONAL_SUBJECT_PATTERN.test(value)
-  );
+export function isCailOperationalSubject<Value>(
+  value: Value,
+): value is Value & string {
+  const text = stringFrom(value);
+  return text !== undefined && CAIL_OPERATIONAL_SUBJECT_PATTERN.test(text);
 }
 
 export interface DeriveCailOperationalSubjectOptions {
@@ -306,11 +319,12 @@ export async function deriveAppSubject(
   appId: string,
   subjectSalt: string,
 ): Promise<string> {
+  const appIdText = stringFrom(appId);
   if (
-    typeof appId !== "string" ||
-    appId === "" ||
-    CONTROL_CHARACTER.test(appId) ||
-    appId.replace(ASCII_WHITESPACE, "") !== appId
+    appIdText === undefined ||
+    appIdText === "" ||
+    containsControlCharacter(appIdText) ||
+    appIdText.replace(ASCII_WHITESPACE, "") !== appIdText
   ) {
     throw new TypeError(
       "appId must be a non-empty string without control characters or edge whitespace.",
@@ -326,7 +340,7 @@ export async function deriveAppSubject(
     ["sign"],
   );
   const digest = new Uint8Array(
-    await crypto.subtle.sign("HMAC", key, encoder.encode(`app|${appId}`)),
+    await crypto.subtle.sign("HMAC", key, encoder.encode(`app|${appIdText}`)),
   );
   return `app-${bytesToHex(digest).slice(0, 32)}`;
 }
@@ -341,21 +355,25 @@ export const CAIL_CANONICAL_ISSUER =
 // existing try/catch, so malformed bytes fail closed to null.
 const decoder = new TextDecoder("utf-8", { fatal: true });
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+type JsonValue = null | boolean | number | string | JsonValue[] | JsonRecord;
+type JsonRecord = { [key: string]: JsonValue };
+
+function isPlainObject<Value>(value: Value): value is Value & JsonRecord {
+  return plainRecordFrom(value) !== undefined;
 }
 
-function ownProp(obj: Record<string, unknown>, key: string): unknown {
-  return Object.hasOwn(obj, key) ? obj[key] : undefined;
+function ownProp<Value>(obj: Value, key: string) {
+  return snapshotOwnProperty(obj, key);
 }
 
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
+function isFiniteNumber<Value>(value: Value): value is Value & number {
+  const number = numberFrom(value);
+  return number !== undefined && Number.isFinite(number);
 }
 
 interface InspectedJwt {
-  header: Record<string, unknown>;
-  payload: Record<string, unknown>;
+  header: JsonRecord;
+  payload: JsonRecord;
 }
 
 const MAX_CLOCK_TOLERANCE_SECONDS = 300;
@@ -366,17 +384,18 @@ const MIN_RSA_MODULUS_BITS = 2048;
 // depend on the JavaScript engine's call stack.
 const MAX_JWKS_JSON_DEPTH = 64;
 
-function isCanonicalBase64url(value: unknown): value is string {
-  if (typeof value !== "string" || value === "") return false;
-  if (!/^[A-Za-z0-9_-]+$/.test(value)) return false;
+function isCanonicalBase64url<Value>(value: Value): value is Value & string {
+  const text = stringFrom(value);
+  if (text === undefined || text === "") return false;
+  if (!/^[A-Za-z0-9_-]+$/.test(text)) return false;
   try {
-    return base64url.encode(base64url.decode(value)) === value;
+    return base64url.encode(base64url.decode(text)) === text;
   } catch {
     return false;
   }
 }
 
-function decodeCanonicalBase64urlUInt(value: unknown): Uint8Array | null {
+function decodeCanonicalBase64urlUInt<Value>(value: Value): Uint8Array | null {
   if (!isCanonicalBase64url(value)) return null;
   try {
     const bytes = base64url.decode(value);
@@ -413,6 +432,19 @@ function hasEligibleRsaPublicNumbers(
   return exponent >= 3 && exponent % 2 === 1;
 }
 
+function parseJsonRecord(text: string): JsonRecord | null {
+  try {
+    const parsed = JSON.parse(text);
+    const record = plainRecordFrom(parsed);
+    if (record === undefined) return null;
+    // SAFETY: JSON.parse produced a plain object and plainRecordFrom rejected
+    // arrays, null, functions, and class instances at this boundary.
+    return record.owner as JsonRecord;
+  } catch {
+    return null;
+  }
+}
+
 function inspectCailJwt(token: string): InspectedJwt | null {
   const parts = token.split(".");
   if (parts.length !== 3) return null;
@@ -424,12 +456,12 @@ function inspectCailJwt(token: string): InspectedJwt | null {
       decoded.push(base64url.decode(segment));
     }
 
-    const header: unknown = JSON.parse(decoder.decode(decoded[0]!));
-    const payload: unknown = JSON.parse(decoder.decode(decoded[1]!));
-    if (!isPlainObject(header) || !isPlainObject(payload)) return null;
+    const header = parseJsonRecord(decoder.decode(decoded[0]!));
+    const payload = parseJsonRecord(decoder.decode(decoded[1]!));
+    if (header === null || payload === null) return null;
     if (ownProp(header, "alg") !== "RS256") return null;
-    const kid = ownProp(header, "kid");
-    if (typeof kid !== "string" || kid === "") return null;
+    const kid = stringFrom(ownProp(header, "kid"));
+    if (kid === undefined || kid === "") return null;
     if (Object.hasOwn(header, "crit")) return null;
     const b64 = ownProp(header, "b64");
     if (b64 !== undefined && b64 !== true) return null;
@@ -440,16 +472,14 @@ function inspectCailJwt(token: string): InspectedJwt | null {
   }
 }
 
-function snapshotStringArray(value: unknown): string[] | null {
+function snapshotStringArray<Value>(value: Value): string[] | null {
   try {
-    if (!Array.isArray(value)) return null;
-    const length: unknown = value.length;
-    if (!Number.isSafeInteger(length) || (length as number) < 1) return null;
+    const array = unknownArrayFrom(value);
+    if (array === undefined || array.length < 1) return null;
     const snapshot: string[] = [];
-    for (let index = 0; index < (length as number); index += 1) {
-      if (!Object.hasOwn(value, index)) return null;
-      const item: unknown = value[index];
-      if (typeof item !== "string" || item === "") return null;
+    for (let index = 0; index < array.length; index += 1) {
+      const item = stringFrom(array[index]);
+      if (item === undefined || item === "") return null;
       snapshot.push(item);
     }
     return snapshot;
@@ -458,8 +488,9 @@ function snapshotStringArray(value: unknown): string[] | null {
   }
 }
 
-function hasExactAudience(value: unknown, expected: string): boolean {
-  return typeof value === "string" && value !== "" && value === expected;
+function hasExactAudience<Value>(value: Value, expected: string): boolean {
+  const text = stringFrom(value);
+  return text !== undefined && text !== "" && text === expected;
 }
 
 const PRIVATE_JWK_PARAMETERS = [
@@ -473,22 +504,22 @@ const PRIVATE_JWK_PARAMETERS = [
   "k",
 ] as const;
 
-function containsPrivateJwkMaterial(value: Record<string, unknown>): boolean {
+function containsPrivateJwkMaterial(value: JsonRecord): boolean {
   return PRIVATE_JWK_PARAMETERS.some((name) => Object.hasOwn(value, name));
 }
 
 interface EligibleRsaVerificationJwk {
-  key: Record<string, unknown>;
+  key: JsonRecord;
   kid: string;
 }
 
 function snapshotRsaVerificationJwk(
-  value: Record<string, unknown>,
+  value: JsonRecord,
 ): EligibleRsaVerificationJwk | null {
-  const kid = ownProp(value, "kid");
+  const kid = stringFrom(ownProp(value, "kid"));
   if (
     ownProp(value, "kty") !== "RSA" ||
-    typeof kid !== "string" ||
+    kid === undefined ||
     kid === ""
   ) {
     return null;
@@ -592,17 +623,17 @@ interface RawVerifierConfigOptions {
   clockToleranceSeconds: unknown;
 }
 
-function snapshotVerifierConfigOptions(
-  input: unknown,
+function snapshotVerifierConfigOptions<Value>(
+  input: Value,
 ): RawVerifierConfigOptions | null {
   try {
     if (!isPlainObject(input)) return null;
     return {
-      jwks: snapshotOwnProperty(input, "jwks"),
-      issuer: snapshotOwnProperty(input, "issuer"),
-      expectedAudience: snapshotOwnProperty(input, "expectedAudience"),
-      supportedIssuers: snapshotOwnProperty(input, "supportedIssuers"),
-      now: snapshotOwnProperty(input, "now"),
+      jwks: ownProp(input, "jwks"),
+      issuer: ownProp(input, "issuer"),
+      expectedAudience: ownProp(input, "expectedAudience"),
+      supportedIssuers: ownProp(input, "supportedIssuers"),
+      now: ownProp(input, "now"),
       clockToleranceSeconds: snapshotOwnProperty(
         input,
         "clockToleranceSeconds",
@@ -617,7 +648,7 @@ function isCanonicalIssuer(value: string): boolean {
   if (
     value === "" ||
     ASCII_WHITESPACE_CHARACTER.test(value) ||
-    CONTROL_CHARACTER.test(value)
+    containsControlCharacter(value)
   ) {
     return false;
   }
@@ -636,37 +667,38 @@ function isCanonicalIssuer(value: string): boolean {
   }
 }
 
-function isValidAudience(value: unknown): value is string {
+function isValidAudience<Value>(value: Value): value is Value & string {
+  const text = stringFrom(value);
   return (
-    typeof value === "string" &&
-    value !== "" &&
-    value.trim() !== "" &&
-    !CONTROL_CHARACTER.test(value)
+    text !== undefined &&
+    text !== "" &&
+    text.trim() !== "" &&
+    !containsControlCharacter(text)
   );
 }
 
-function isWithinJwksJsonDepth(value: unknown): boolean {
+function isWithinJwksJsonDepth<Value>(value: Value): boolean {
   const pending: Array<{ value: unknown; depth: number }> = [
     { value, depth: 0 },
   ];
   while (pending.length > 0) {
     const current = pending.pop()!;
     if (current.depth > MAX_JWKS_JSON_DEPTH) return false;
-    if (typeof current.value !== "object" || current.value === null) continue;
-
     const childDepth = current.depth + 1;
-    if (Array.isArray(current.value)) {
-      for (let index = current.value.length - 1; index >= 0; index -= 1) {
-        pending.push({ value: current.value[index], depth: childDepth });
+    const array = unknownArrayFrom(current.value);
+    if (array !== undefined) {
+      for (let index = array.length - 1; index >= 0; index -= 1) {
+        pending.push({ value: array[index], depth: childDepth });
       }
       continue;
     }
 
-    const record = current.value as Record<string, unknown>;
-    const keys = Object.keys(record);
+    const record = plainRecordFrom(current.value);
+    if (record === undefined) continue;
+    const keys = Object.keys(record.owner);
     for (let index = keys.length - 1; index >= 0; index -= 1) {
       const key = keys[index]!;
-      pending.push({ value: record[key], depth: childDepth });
+      pending.push({ value: record.read(key), depth: childDepth });
     }
   }
   return true;
@@ -687,33 +719,25 @@ export async function loadIdentityVerifierConfig(
   const raw = snapshotVerifierConfigOptions(input);
   if (raw === null) return { ok: false, reason: "jwks_missing" };
 
-  if (
-    typeof raw.jwks !== "string" ||
-    raw.jwks.replace(ASCII_WHITESPACE, "") === ""
-  ) {
+  const jwksText = stringFrom(raw.jwks);
+  if (jwksText === undefined || jwksText.replace(ASCII_WHITESPACE, "") === "") {
     return { ok: false, reason: "jwks_missing" };
   }
 
-  let parsedJwks: unknown;
-  try {
-    parsedJwks = JSON.parse(raw.jwks);
-  } catch {
-    return { ok: false, reason: "jwks_malformed" };
-  }
+  const parsedJwks = parseJsonRecord(jwksText);
+  if (parsedJwks === null) return { ok: false, reason: "jwks_malformed" };
   if (!isWithinJwksJsonDepth(parsedJwks)) {
     return { ok: false, reason: "jwks_malformed" };
   }
-  if (!isPlainObject(parsedJwks)) {
-    return { ok: false, reason: "jwks_malformed" };
-  }
   const keys = ownProp(parsedJwks, "keys");
-  if (!Array.isArray(keys) || keys.length === 0) {
+  const keyArray = unknownArrayFrom(keys);
+  if (keyArray === undefined || keyArray.length === 0) {
     return { ok: false, reason: "jwks_malformed" };
   }
 
   const keyRecords: EligibleRsaVerificationJwk[] = [];
   const keyIds = new Set<string>();
-  for (const key of keys) {
+  for (const key of keyArray) {
     if (!isPlainObject(key)) {
       return { ok: false, reason: "jwks_malformed" };
     }
@@ -725,10 +749,11 @@ export async function loadIdentityVerifierConfig(
     keyRecords.push(eligibleKey);
   }
 
-  if (typeof raw.issuer !== "string" || raw.issuer === "") {
+  const issuer = stringFrom(raw.issuer);
+  if (issuer === undefined || issuer === "") {
     return { ok: false, reason: "issuer_missing" };
   }
-  if (!isCanonicalIssuer(raw.issuer)) {
+  if (!isCanonicalIssuer(issuer)) {
     return { ok: false, reason: "issuer_unsupported" };
   }
 
@@ -746,28 +771,34 @@ export async function loadIdentityVerifierConfig(
     }
     supportedIssuers = snapshot;
   }
-  if (!supportedIssuers.includes(raw.issuer)) {
+  if (!supportedIssuers.includes(issuer)) {
     return { ok: false, reason: "issuer_unsupported" };
   }
 
   if (raw.expectedAudience === undefined || raw.expectedAudience === "") {
     return { ok: false, reason: "audience_missing" };
   }
-  if (!isValidAudience(raw.expectedAudience)) {
+  const expectedAudience = stringFrom(raw.expectedAudience);
+  if (expectedAudience === undefined || expectedAudience === "") {
+    return { ok: false, reason: "audience_malformed" };
+  }
+  if (!isValidAudience(expectedAudience)) {
     return { ok: false, reason: "audience_malformed" };
   }
 
-  const now = raw.now;
-  if (
-    now !== undefined &&
-    (!isFiniteNumber(now) || Math.abs(now) > MAX_DATE_SECONDS)
-  ) {
-    return { ok: false, reason: "timing_invalid" };
+  let now: number | undefined;
+  if (raw.now !== undefined) {
+    now = numberFrom(raw.now);
+    if (now === undefined || !Number.isFinite(now) || Math.abs(now) > MAX_DATE_SECONDS) {
+      return { ok: false, reason: "timing_invalid" };
+    }
   }
   const clockToleranceSeconds =
-    raw.clockToleranceSeconds === undefined ? 60 : raw.clockToleranceSeconds;
+    raw.clockToleranceSeconds === undefined
+      ? 60
+      : numberFrom(raw.clockToleranceSeconds);
   if (
-    !isFiniteNumber(clockToleranceSeconds) ||
+    clockToleranceSeconds === undefined ||
     clockToleranceSeconds < 0 ||
     clockToleranceSeconds > MAX_CLOCK_TOLERANCE_SECONDS
   ) {
@@ -791,32 +822,36 @@ export async function loadIdentityVerifierConfig(
     return { ok: false, reason: "jwks_malformed" };
   }
 
+  // SAFETY: every field was validated above, and the frozen object is branded
+  // before it is entered into the private snapshot map.
   const config = Object.freeze({
-    expectedAudience: raw.expectedAudience,
-    issuer: raw.issuer,
+    expectedAudience,
+    issuer,
     clockToleranceSeconds,
     keyIds: Object.freeze([...keyIds]),
-  }) as unknown as IdentityVerifierConfig;
+  }) as IdentityVerifierConfig;
   identityVerifierConfigSnapshots.set(config, {
-    expectedAudience: raw.expectedAudience,
-    issuer: raw.issuer,
-    now: now as number | undefined,
+    expectedAudience,
+    issuer,
+    now,
     clockToleranceSeconds,
     keysByKid,
   });
   return { ok: true, config };
 }
 
-async function verifyIdentityJwtInternal(
-  token: string,
+async function verifyIdentityJwtInternal<Value>(
+  token: Value,
   config: IdentityVerifierConfigSnapshot,
 ): Promise<CailIdentity | null> {
-  if (typeof token !== "string") return null;
+  const tokenText = stringFrom(token);
+  if (tokenText === undefined) return null;
 
-  const inspected = inspectCailJwt(token);
+  const inspected = inspectCailJwt(tokenText);
   if (!inspected) return null;
 
-  const kid = ownProp(inspected.header, "kid") as string;
+  const kid = stringFrom(ownProp(inspected.header, "kid"));
+  if (kid === undefined) return null;
   const key = config.keysByKid.get(kid);
   if (key === undefined) return null;
 
@@ -827,18 +862,15 @@ async function verifyIdentityJwtInternal(
   const sub = ownProp(inspected.payload, "sub");
   if (!isFiniteNumber(exp)) return null;
   if (!hasExactAudience(aud, config.expectedAudience)) return null;
-  if (
-    typeof iss !== "string" ||
-    iss === "" ||
-    iss !== config.issuer
-  ) {
+  const issuer = stringFrom(iss);
+  if (issuer === undefined || issuer === "" || issuer !== config.issuer) {
     return null;
   }
   if (nbf !== undefined && !isFiniteNumber(nbf)) return null;
   if (!isCailSubject(sub)) return null;
 
   try {
-    await jwtVerify(token, key, {
+    await jwtVerify(tokenText, key, {
       algorithms: ["RS256"],
       audience: config.expectedAudience,
       issuer: config.issuer,
@@ -861,17 +893,21 @@ async function verifyIdentityJwtInternal(
   ) {
     return null;
   }
-  return {
+  const identity: CailIdentity = {
     subject: sub,
-    ...(typeof operationalSubject === "string"
-      ? { operationalSubject }
-      : {}),
-    email: typeof email === "string" ? email : undefined,
-    name: typeof name === "string" ? name : undefined,
-    entitlements: Array.isArray(entitlements)
-      ? entitlements.filter((item): item is string => typeof item === "string")
-      : [],
+    email: stringFrom(email),
+    name: stringFrom(name),
+    entitlements: [],
   };
+  if (operationalSubject !== undefined) identity.operationalSubject = operationalSubject;
+  const entitlementValues = unknownArrayFrom(entitlements);
+  if (entitlementValues !== undefined) {
+    identity.entitlements = entitlementValues.flatMap((item) => {
+      const text = stringFrom(item);
+      return text === undefined ? [] : [text];
+    });
+  }
+  return identity;
 }
 
 /**
@@ -933,12 +969,13 @@ interface IdentityKeyring {
 const KEYRING_JWT_MAX_LENGTH = 8_192;
 const COMPACT_JWS_PATTERN = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 
-function isCompactJwsShape(value: unknown): value is string {
+function isCompactJwsToken<Value>(value: Value): value is Value & string {
+  const text = stringFrom(value);
   return (
-    typeof value === "string" &&
-    value.length > 0 &&
-    value.length <= KEYRING_JWT_MAX_LENGTH &&
-    COMPACT_JWS_PATTERN.test(value)
+    text !== undefined &&
+    text.length > 0 &&
+    text.length <= KEYRING_JWT_MAX_LENGTH &&
+    COMPACT_JWS_PATTERN.test(text)
   );
 }
 
@@ -955,10 +992,10 @@ function isCompactJwsShape(value: unknown): value is string {
 export function readIdentityKeyring(headers: Headers): IdentityKeyring | null {
   const appJwt = headers.get(CAIL_IDENTITY_JWT_HEADER);
   if (appJwt === null) return null;
-  if (!isCompactJwsShape(appJwt)) return null;
+  if (!isCompactJwsToken(appJwt)) return null;
   const gatewayJwt = headers.get(CAIL_GATEWAY_IDENTITY_JWT_HEADER);
   if (gatewayJwt === null) return { appJwt };
-  if (!isCompactJwsShape(gatewayJwt)) return null;
+  if (!isCompactJwsToken(gatewayJwt)) return null;
   return { appJwt, gatewayJwt };
 }
 

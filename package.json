@@ -1,6 +1,6 @@
 {
   "name": "@cuny-ai-lab/cail-identity",
-  "version": "5.2.2",
+  "version": "5.2.3",
   "description": "CAIL stable pseudonymous subject derivation and RS256/JWKS identity-JWT verification.",
   "type": "module",
   "license": "MIT",
@@ -33,25 +33,30 @@
   },
   "packageManager": "bun@1.3.14",
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "lint": "oxlint .",
     "check": "bun run test && bun run typecheck && bun run test:lua && bun run check:package",
     "check:package": "bun pm pack --dry-run --ignore-scripts",
     "typecheck": "tsc -p tsconfig.build.json --noEmit && tsc -p tsconfig.test.json",
     "test": "bun run build && vitest run",
     "test:lua": "luajit test/subject-derivation-v2.lua",
     "test:watch": "vitest",
-    "prepublishOnly": "bun run check",
+    "prepublishOnly": "bun run verify",
+    "verify": "bun run lint && bun run check",
     "prepare": "bun run build"
   },
   "dependencies": {
-    "jose": "6.2.3"
+    "jose": "6.2.3",
+    "zod": "4.4.3"
   },
   "overrides": {
     "postcss": "8.5.25",
-    "nanoid": "3.3.17"
+    "nanoid": "3.3.18"
   },
   "devDependencies": {
     "@types/node": "^20.17.6",
+    "@oxlint/plugins": "1.79.0",
+    "oxlint": "1.79.0",
     "typescript": "^5.6.3",
     "vitest": "^4.1.10"
   },

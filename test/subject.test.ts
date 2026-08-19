@@ -25,6 +25,8 @@ interface SubjectVector {
   operationalSubject: string;
 }
 
+// SAFETY: this checked-in contract fixture is parsed only for the vector
+// fields asserted by the cross-language contract tests below.
 const vectorContract = JSON.parse(
   readFileSync(
     new URL("../contract/subject-derivation-v2.json", import.meta.url),
@@ -160,7 +162,13 @@ describe("stable CAIL subject", () => {
 
   it("snapshots hostile derivation accessors and uses the exact salt bytes validated", async () => {
     const reads = { issuer: 0, oidcSubject: 0, subjectSalt: 0 };
-    const hostile = Object.create(null) as Record<string, unknown>;
+    // SAFETY: the null-prototype object is populated with the exact derivation
+    // option accessors immediately below to exercise the snapshot boundary.
+    const hostile = Object.create(null) as {
+      issuer: string;
+      oidcSubject: string;
+      subjectSalt: string;
+    };
     const values = {
       issuer: options.issuer,
       oidcSubject: "bob@LOGIN.CUNY.EDU",
@@ -171,6 +179,8 @@ describe("stable CAIL subject", () => {
       oidcSubject: "mallory",
       subjectSalt: "short",
     };
+    // SAFETY: Object.keys(values) contains exactly the three derivation option
+    // names used by the accessor map below.
     for (const name of Object.keys(values) as Array<keyof typeof values>) {
       Object.defineProperty(hostile, name, {
         enumerable: true,
@@ -181,9 +191,11 @@ describe("stable CAIL subject", () => {
       });
     }
 
-    await expect(
-      deriveCailSubject(hostile as unknown as Parameters<typeof deriveCailSubject>[0]),
-    ).resolves.toBe("cail-07c3e42149a128923ef778dcb680b733");
+    // SAFETY: hostile has all DeriveCailSubjectOptions properties installed as
+    // accessors above; the test intentionally changes their second read.
+    await expect(deriveCailSubject(hostile)).resolves.toBe(
+      "cail-07c3e42149a128923ef778dcb680b733",
+    );
     expect(reads).toEqual({ issuer: 1, oidcSubject: 1, subjectSalt: 1 });
   });
 });

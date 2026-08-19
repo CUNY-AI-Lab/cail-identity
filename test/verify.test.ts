@@ -10,8 +10,11 @@ import {
   makeRsaFixture,
   mintRsaJwt,
   signRawRsaPayload,
+  type JsonObject,
+  type JsonValue,
   type RsaFixture,
 } from "./fixtures.js";
+import { stringFrom, unknownArrayFrom } from "../src/validation.js";
 
 const NOW = 1_000_000;
 const ISS = "https://issuer.example/cail-sso";
@@ -29,7 +32,7 @@ beforeAll(async () => {
   ]);
 });
 
-function claims(over: Record<string, unknown> = {}) {
+function claims(over: JsonObject = {}): JsonObject {
   return {
     sub: "cail-0123456789abcdef0123456789abcdef",
     aud: AUD,
@@ -39,36 +42,45 @@ function claims(over: Record<string, unknown> = {}) {
   };
 }
 
-async function verify(
-  token: string,
-  jwks: unknown = oldKey.jwks,
-  opts: unknown = OPTS,
+type VerifyOptions = {
+  allowedIssuers?: JsonValue;
+  expectedAudience?: JsonValue;
+  now?: JsonValue;
+  clockToleranceSeconds?: JsonValue;
+};
+
+async function verify<Token extends string, Jwks>(
+  token: Token,
+  jwks?: Jwks,
+  opts?: VerifyOptions,
 ) {
-  const values = opts as Partial<typeof OPTS> & {
-    allowedIssuers?: unknown;
-    expectedAudience?: unknown;
-    now?: unknown;
-    clockToleranceSeconds?: unknown;
-  };
+  const jwksValue = jwks === undefined ? oldKey.jwks : jwks;
+  const values: VerifyOptions = opts ?? OPTS;
   const allowedIssuers = values.allowedIssuers;
+  const allowedIssuerArray = unknownArrayFrom(allowedIssuers);
   const issuer =
-    Array.isArray(allowedIssuers) && typeof allowedIssuers[0] === "string"
-      ? allowedIssuers[0]
-      : undefined;
-  const loaded = await loadIdentityVerifierConfig({
-    jwks: JSON.stringify(jwks),
+    allowedIssuerArray === undefined
+      ? undefined
+      : stringFrom(allowedIssuerArray[0]);
+  const raw = {
+    jwks: JSON.stringify(jwksValue),
     issuer,
     expectedAudience: values.expectedAudience,
     supportedIssuers: allowedIssuers,
     now: values.now,
     clockToleranceSeconds: values.clockToleranceSeconds,
-  } as LoadIdentityVerifierConfigInput);
+  };
+  // SAFETY: this test helper deliberately forwards malformed JSON-shaped
+  // values to the public configuration boundary.
+  const loaded = await loadIdentityVerifierConfig(
+    raw as LoadIdentityVerifierConfigInput,
+  );
   if (!loaded.ok) throw new Error(`invalid test config: ${loaded.reason}`);
   return verifyIdentityJwt(token, loaded.config);
 }
 
-async function expectConfigError(
-  jwks: unknown,
+async function expectConfigError<Value>(
+  jwks: Value,
   reason = "jwks_malformed",
 ) {
   const result = await loadIdentityVerifierConfig({
@@ -143,7 +155,7 @@ describe("verifyIdentityJwt structure, encoding, and JSON", () => {
 
   it("rejects a non-canonical base64url spelling of every segment", async () => {
     const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    const withPaddingBits = (makeValue: (pad: string) => unknown): string => {
+    const withPaddingBits = <Value>(makeValue: (pad: string) => Value): string => {
       for (let length = 0; length < 4; length += 1) {
         const segment = encodeJson(makeValue("a".repeat(length)));
         if ([2, 3].includes(segment.length % 4)) return segment;
@@ -278,7 +290,7 @@ describe("verifyIdentityJwt audience, issuer, and subject", () => {
     { aud: [AUD, ""] },
     { aud: [AUD, 7] },
   ])("rejects malformed or unauthorized audience $aud", async ({ aud }) => {
-    const value = claims({ aud }) as Record<string, unknown>;
+    const value = claims({ aud });
     if (aud === undefined) delete value.aud;
     expect(await verify(await mintRsaJwt(value, oldKey))).toBeNull();
   });
@@ -294,7 +306,7 @@ describe("verifyIdentityJwt audience, issuer, and subject", () => {
   );
 
   it.each([undefined, "", OTHER_ISS, 7])("rejects issuer %j", async (iss) => {
-    const value = claims({ iss }) as Record<string, unknown>;
+    const value = claims({ iss });
     if (iss === undefined) delete value.iss;
     expect(await verify(await mintRsaJwt(value, oldKey))).toBeNull();
   });
@@ -324,7 +336,7 @@ describe("verifyIdentityJwt audience, issuer, and subject", () => {
     "cail-0123456789abcdef0123456789abcde",
     " cail-0123456789abcdef0123456789abcdef",
   ])("rejects subject %j", async (sub) => {
-    const value = claims({ sub }) as Record<string, unknown>;
+    const value = claims({ sub });
     if (sub === undefined) delete value.sub;
     expect(await verify(await mintRsaJwt(value, oldKey))).toBeNull();
   });
@@ -347,7 +359,7 @@ describe("verifyIdentityJwt time and options", () => {
   it.each([undefined, "9999999", Number.NaN, Number.POSITIVE_INFINITY])(
     "rejects invalid exp %j",
     async (exp) => {
-      const value = claims({ exp }) as Record<string, unknown>;
+      const value = claims({ exp });
       if (exp === undefined) delete value.exp;
       expect(await verify(await mintRsaJwt(value, oldKey))).toBeNull();
     },
@@ -364,13 +376,17 @@ describe("verifyIdentityJwt time and options", () => {
 
 describe("verifyIdentityJwt own-property and fail-closed behavior", () => {
   it("does not source key metadata from prototypes during config loading", async () => {
-    const inheritedKid = Object.create(oldKey.publicJwk) as Record<string, unknown>;
+    // SAFETY: this null-prototype object intentionally inherits kid only, so
+    // config loading must reject it instead of honoring prototype metadata.
+    const inheritedKid = Object.create(oldKey.publicJwk) as { kid?: string };
     delete inheritedKid.kid;
     await expectConfigError({ keys: [inheritedKid] });
   });
 
   it("returns null rather than throwing for a wrong token runtime type", async () => {
-    await expect(verify(null as unknown as string)).resolves.toBeNull();
+    // SAFETY: this deliberately injects a wrong runtime token type to verify
+    // the public fail-closed boundary.
+    await expect(verify(null as never)).resolves.toBeNull();
   });
 
   it("does not mutate the token, JWKS, options, or claims", async () => {

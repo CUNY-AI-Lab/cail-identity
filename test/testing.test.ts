@@ -24,6 +24,7 @@ import {
   createTestIdentityIssuer,
   type TestIdentityIssuer,
 } from "../src/testing.js";
+import type { JsonObject } from "./fixtures.js";
 
 function referenceSubject(seed: string): string {
   return `cail-${createHash("sha256").update(seed, "utf8").digest("hex").slice(0, 32)}`;
@@ -109,12 +110,14 @@ describe("canonicalTestSubject", () => {
   });
 
   it("rejects non-string seeds", () => {
-    expect(() => canonicalTestSubject(42 as unknown as string)).toThrow(
+    // SAFETY: these deliberately inject wrong runtime values to exercise the
+    // test-fixture input boundary.
+    expect(() => canonicalTestSubject(42 as never)).toThrow(
       TypeError,
     );
-    expect(() =>
-      canonicalTestSubject(undefined as unknown as string),
-    ).toThrow(TypeError);
+    // SAFETY: this deliberately injects an undefined runtime value to exercise
+    // the test-fixture input boundary.
+    expect(() => canonicalTestSubject(undefined as never)).toThrow(TypeError);
   });
 });
 
@@ -206,18 +209,23 @@ describe("createTestIdentityIssuer", () => {
     await expect(
       issuer.mintIdentityJwt({ audience: "" }),
     ).rejects.toThrow(TypeError);
+    // SAFETY: malformed values deliberately bypass the typed fixture contract
+    // to exercise its runtime validation boundary.
+    await expect(issuer.mintIdentityJwt(undefined as never)).rejects.toThrow(
+      TypeError,
+    );
+    // SAFETY: this deliberately passes an array at the audience boundary.
     await expect(
-      issuer.mintIdentityJwt(undefined as unknown as { audience: string }),
-    ).rejects.toThrow(TypeError);
-    await expect(
-      issuer.mintIdentityJwt({ audience: [42] as unknown as string[] }),
+      issuer.mintIdentityJwt({ audience: [42] as never }),
     ).rejects.toThrow(TypeError);
   });
 
-  function decodePayload(token: string): Record<string, unknown> {
+  function decodePayload(token: string): JsonObject {
     const part = token.split(".")[1]!;
     const b64 = part.replace(/-/g, "+").replace(/_/g, "/");
-    return JSON.parse(Buffer.from(b64, "base64").toString("utf8"));
+    // SAFETY: tokens in this test are compact JWTs and this helper is used
+    // only to inspect their JSON object payloads.
+    return JSON.parse(Buffer.from(b64, "base64").toString("utf8")) as JsonObject;
   }
 
   it("mints auth_time and the token still verifies (session-binding contracts)", async () => {
@@ -298,7 +306,9 @@ describe("createTestIdentityIssuer", () => {
     await expect(
       issuer.mintIdentityJwt({
         audience: AUD,
-        claims: ["nope"] as unknown as Record<string, unknown>,
+        // SAFETY: this deliberately passes an array at the claims boundary to
+        // verify the fixture rejects a non-object override.
+        claims: ["nope"] as never,
       }),
     ).rejects.toThrow(TypeError);
   });
