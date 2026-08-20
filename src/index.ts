@@ -347,7 +347,7 @@ export async function deriveAppSubject(
 
 /** Canonical issuer for every standalone CAIL environment. */
 export const CAIL_CANONICAL_ISSUER =
-  "https://cail-doorway.ailab-452.workers.dev/cail-sso";
+  "https://tools.ailab.gc.cuny.edu/cail-sso";
 
 // fatal:true — RFC 7519 §7.2 / RFC 8725 §3.7 require the header and payload
 // to be valid UTF-8 JSON. The default lenient decoder would smuggle invalid

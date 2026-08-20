@@ -14,14 +14,14 @@
   },
   "examples": [
     {
-      "iss": "https://cail-doorway.ailab-452.workers.dev/cail-sso",
+      "iss": "https://tools.ailab.gc.cuny.edu/cail-sso",
       "aud": "cail:workbench",
       "sub": "cail-0123456789abcdef0123456789abcdef",
       "log_sub": "cail-v1-fedcba9876543210fedcba9876543210",
       "exp": 2000000000
     },
     {
-      "iss": "https://cail-doorway.ailab-452.workers.dev/cail-sso",
+      "iss": "https://tools.ailab.gc.cuny.edu/cail-sso",
       "aud": "cail:gateway",
       "sub": "cail-0123456789abcdef0123456789abcdef",
       "log_sub": "cail-v1-fedcba9876543210fedcba9876543210",

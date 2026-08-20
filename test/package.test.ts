@@ -61,7 +61,7 @@ describe("published package entry", () => {
     expect(deriveAppSubject).toBeTypeOf("function");
     expect(isAppSubject).toBeTypeOf("function");
     expect(CAIL_CANONICAL_ISSUER).toBe(
-      "https://cail-doorway.ailab-452.workers.dev/cail-sso",
+      "https://tools.ailab.gc.cuny.edu/cail-sso",
     );
   });
 
