@@ -20,12 +20,28 @@
 
 import { base64url, importJWK, jwtVerify } from "jose";
 
+import { CAIL_CANONICAL_ORIGIN } from "./auth-error.js";
 import {
   numberFrom,
   plainRecordFrom,
   stringFrom,
   unknownArrayFrom,
 } from "./validation.js";
+
+export {
+  CAIL_AUTH_ERROR_CODES,
+  CAIL_CANONICAL_ORIGIN,
+  createCailAuthError,
+  isCailAuthLaunch,
+  parseCailAuthErrorEnvelope,
+  parseCailAuthErrorJson,
+  serializeCailAuthError,
+} from "./auth-error.js";
+export type {
+  CailAuthError,
+  CailAuthErrorCode,
+  CailAuthErrorEnvelope,
+} from "./auth-error.js";
 
 export interface CailIdentity {
   subject: string;
@@ -347,7 +363,7 @@ export async function deriveAppSubject(
 
 /** Canonical issuer for every standalone CAIL environment. */
 export const CAIL_CANONICAL_ISSUER =
-  "https://tools.ailab.gc.cuny.edu/cail-sso";
+  `${CAIL_CANONICAL_ORIGIN}/cail-sso` as const;
 
 // fatal:true — RFC 7519 §7.2 / RFC 8725 §3.7 require the header and payload
 // to be valid UTF-8 JSON. The default lenient decoder would smuggle invalid

@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cuny-ai-lab.invalid/contracts/auth-error-envelope-v1.json",
+  "title": "CAIL authentication and SSO error envelope",
+  "description": "Strict nested JSON used by CAIL auth and SSO boundaries. Flat {error: string} bodies are not part of this contract.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["error"],
+  "properties": {
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": [
+            "authentication_required",
+            "authentication_failed",
+            "invalid_credential",
+            "session_invalid",
+            "admission_required",
+            "admission_unavailable",
+            "identity_unavailable",
+            "identity_verification_misconfigured"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]*$"
+        },
+        "launch": {
+          "type": "string",
+          "oneOf": [
+            {
+              "pattern": "^/(?:[A-Za-z0-9][A-Za-z0-9._~-]*(?:/[A-Za-z0-9][A-Za-z0-9._~-]*)*/?)?$"
+            },
+            {
+              "pattern": "^https://tools\\.ailab\\.gc\\.cuny\\.edu/(?:[A-Za-z0-9][A-Za-z0-9._~-]*(?:/[A-Za-z0-9][A-Za-z0-9._~-]*)*/?)?$"
+            }
+          ],
+          "description": "A root-relative path or a path on the canonical tools origin. Query strings, fragments, dot segments, backslashes, and other origins are forbidden."
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "error": {
+        "code": "authentication_required",
+        "message": "Sign in to continue.",
+        "launch": "/launch/agent-studio"
+      }
+    },
+    {
+      "error": {
+        "code": "admission_unavailable",
+        "message": "Membership verification is temporarily unavailable. Try again later."
+      }
+    }
+  ]
+}

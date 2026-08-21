@@ -40,6 +40,53 @@ outside the repository, set `NPM_CONFIG_TOKEN` to a classic PAT with
 `bun publish`. GitHub Actions may instead use its repository `GITHUB_TOKEN`
 with `packages: write`.
 
+## Auth and SSO failure envelope
+
+The package exports the strict auth boundary used by Doorway and browser-facing
+Workers. Its only JSON shape is:
+
+```json
+{
+  "error": {
+    "code": "authentication_required",
+    "message": "Sign in to continue.",
+    "launch": "/launch/agent-studio"
+  }
+}
+```
+
+The finite codes are `authentication_required`, `authentication_failed`,
+`invalid_credential`, `session_invalid`, `admission_required`,
+`admission_unavailable`, `identity_unavailable`, and
+`identity_verification_misconfigured`. `launch` is optional. When present it
+must be a root-relative path or a path on
+`https://tools.ailab.gc.cuny.edu`; query strings, fragments, dot segments,
+backslashes, protocol-relative values, and other origins are rejected.
+
+```ts
+import {
+  createCailAuthError,
+  parseCailAuthErrorJson,
+  serializeCailAuthError,
+} from "@cuny-ai-lab/cail-identity";
+
+const body = createCailAuthError(
+  "authentication_required",
+  "Sign in to continue.",
+  "/launch/agent-studio",
+);
+const json = serializeCailAuthError(body);
+const parsed = parseCailAuthErrorJson(json); // null for malformed/legacy body
+```
+
+The parser rejects flat `{ "error": "..." }` responses and every unknown or
+extra field. Consumers continue to own HTTP status, cache headers, browser
+redirect timing, and response construction; they should migrate their auth
+surfaces to this package's nested body before pinning the release. The package
+does not provide session, redirect, or provider policy behavior. The machine-
+readable contract is exported as
+`@cuny-ai-lab/cail-identity/contract/auth-error-envelope-v1.json`.
+
 ## Stable subject
 
 ```ts

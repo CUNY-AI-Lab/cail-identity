@@ -1,9 +1,12 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { readFile } from "node:fs/promises";
 import {
+  CAIL_AUTH_ERROR_CODES,
   CAIL_CANONICAL_ISSUER,
+  createCailAuthError,
   deriveAppSubject,
   deriveCailSubject,
+  parseCailAuthErrorJson,
   isAppSubject,
   isCailSubject,
   loadIdentityVerifierConfig,
@@ -63,6 +66,9 @@ describe("published package entry", () => {
     expect(CAIL_CANONICAL_ISSUER).toBe(
       "https://tools.ailab.gc.cuny.edu/cail-sso",
     );
+    expect(CAIL_AUTH_ERROR_CODES).toContain("authentication_required");
+    expect(createCailAuthError).toBeTypeOf("function");
+    expect(parseCailAuthErrorJson).toBeTypeOf("function");
   });
 
   it("publishes to GitHub Packages under the @cuny-ai-lab scope", () => {
@@ -73,6 +79,12 @@ describe("published package entry", () => {
     expect(packageMetadata.repository).toEqual({
       type: "git",
       url: "git+https://github.com/CUNY-AI-Lab/cail-identity.git",
+    });
+    expect(packageMetadata).toMatchObject({
+      exports: {
+        "./contract/auth-error-envelope-v1.json":
+          "./contract/auth-error-envelope-v1.json",
+      },
     });
   });
 
