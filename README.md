@@ -112,20 +112,22 @@ The v2 algorithm is:
 
 This function does not authenticate its input. Call it only with a subject
 obtained from a verified CUNY token or trusted user-info response. The salt is a
-server secret containing at least 32 UTF-8 bytes, matching the gateway's
-minimum. The salt and all options are read once and the exact validated salt
-bytes are passed to Web Crypto. The issuer namespaces otherwise identical
-subjects. Inputs that canonicalize to empty or retain an ASCII control
+server secret containing at least 32 UTF-8 bytes. The salt and all options are
+read once, and the exact validated salt bytes are passed to Web Crypto; the
+issuer namespaces otherwise identical subjects. Inputs that canonicalize to
+empty or retain an ASCII control
 character are rejected; the Lua and TypeScript output vectors cover the
 accepted production CUNY shapes.
 
 The v2 framing intentionally changes every derived user ownership ID from the
 delimiter-based v1 result. The package contains no migration, aliasing,
-backfill, or dual-read claim, and no live gateway or stored ownership data has
-adopted v2 through this change. Producers and consumers must coordinate a
-separate migration before publication or deployment. They can use
-`contract/subject-derivation-v2.json` and the adjacent Lua reference to compare
-their implementations. The v2 package patch does not edit a consumer.
+backfill, or dual-read behavior. Doorway is the current trusted derivation
+boundary and uses this package's v2 algorithm for CUNY sign-in and its private
+subject-derivation entrypoint. Other stores and consumers must reconcile their
+own persisted ownership data before changing derivation inputs or salts. The
+language-neutral `contract/subject-derivation-v2.json` vectors and adjacent Lua
+reference support independent implementations without assigning derivation to
+the Gateway.
 
 ## Stable app-principal subject (ADR-0007)
 
@@ -267,12 +269,12 @@ and accounting policy to the verified subject; this package does not provide
 that policy.
 
 Subject derivation (`deriveCailSubject`) exists for the trusted authentication
-boundary only — the SSO gate and its verification tooling. Application code
-never derives subjects; it receives them inside verified tokens. The gate's
-Lua implementation (`gateway/lua/cail/identity.lua` in the cail-gateway repo)
-must adopt the packaged v2 contract before deployment. It is deliberately not
-edited here. `contract/subject-derivation-v2.json` and its adjacent Lua
-reference provide the common vectors and framing implementation.
+boundary only. Doorway derives the canonical subject from verified CUNY OIDC
+input and mints audience-bound identity JWTs. Application code, including the
+Gateway, does not derive a person from provider input; it consumes the
+canonical subject only after verifying the appropriate identity or Registry
+boundary. `contract/subject-derivation-v2.json` and its adjacent Lua reference
+provide common vectors for any separately reviewed non-TypeScript producer.
 
 This package does not provide sessions, CAIL API keys, model routing, quotas,
 or custom error handling.
