@@ -212,6 +212,23 @@ function bytesToHex(bytes: Uint8Array): string {
   return result;
 }
 
+async function deriveHmacSha256Hex(
+  keyBytes: Uint8Array<ArrayBuffer>,
+  input: Uint8Array<ArrayBuffer>,
+): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    keyBytes,
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const digest = new Uint8Array(
+    await crypto.subtle.sign("HMAC", key, input),
+  );
+  return bytesToHex(digest);
+}
+
 /**
  * Derive the established stable pseudonymous CAIL subject.
  *
@@ -223,25 +240,15 @@ export async function deriveCailSubject(
 ): Promise<string> {
   const { issuer, canonicalSubject, saltBytes } =
     snapshotSubjectDerivationOptions(options, "subjectSalt");
-  const key = await crypto.subtle.importKey(
-    "raw",
+  const digest = await deriveHmacSha256Hex(
     saltBytes,
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const digest = new Uint8Array(
-    await crypto.subtle.sign(
-      "HMAC",
-      key,
-      encodeSubjectHmacInput(
-        OWNERSHIP_SUBJECT_DOMAIN,
-        issuer,
-        canonicalSubject,
-      ),
+    encodeSubjectHmacInput(
+      OWNERSHIP_SUBJECT_DOMAIN,
+      issuer,
+      canonicalSubject,
     ),
   );
-  return `cail-${bytesToHex(digest).slice(0, 32)}`;
+  return `cail-${digest.slice(0, 32)}`;
 }
 
 /**
@@ -298,25 +305,15 @@ export async function deriveCailOperationalSubject(
 ): Promise<string> {
   const { issuer, canonicalSubject, saltBytes } =
     snapshotSubjectDerivationOptions(options, "operationalSubjectSalt");
-  const key = await crypto.subtle.importKey(
-    "raw",
+  const digest = await deriveHmacSha256Hex(
     saltBytes,
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const digest = new Uint8Array(
-    await crypto.subtle.sign(
-      "HMAC",
-      key,
-      encodeSubjectHmacInput(
-        OPERATIONAL_SUBJECT_DOMAIN,
-        issuer,
-        canonicalSubject,
-      ),
+    encodeSubjectHmacInput(
+      OPERATIONAL_SUBJECT_DOMAIN,
+      issuer,
+      canonicalSubject,
     ),
   );
-  return `cail-v1-${bytesToHex(digest).slice(0, 32)}`;
+  return `cail-v1-${digest.slice(0, 32)}`;
 }
 
 /**
@@ -348,17 +345,11 @@ export async function deriveAppSubject(
   }
   const saltBytes = snapshotSubjectSalt(subjectSalt, "subjectSalt");
 
-  const key = await crypto.subtle.importKey(
-    "raw",
+  const digest = await deriveHmacSha256Hex(
     saltBytes,
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
+    encoder.encode(`app|${appIdText}`),
   );
-  const digest = new Uint8Array(
-    await crypto.subtle.sign("HMAC", key, encoder.encode(`app|${appIdText}`)),
-  );
-  return `app-${bytesToHex(digest).slice(0, 32)}`;
+  return `app-${digest.slice(0, 32)}`;
 }
 
 /** Canonical issuer for every standalone CAIL environment. */
