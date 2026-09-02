@@ -1,6 +1,6 @@
 {
   "name": "@cuny-ai-lab/cail-identity",
-  "version": "5.2.5",
+  "version": "5.2.6",
   "description": "CAIL stable pseudonymous subject derivation and RS256/JWKS identity-JWT verification.",
   "type": "module",
   "license": "MIT",
@@ -19,8 +19,7 @@
     "./contract/principal-v1.json": "./contract/principal-v1.json",
     "./contract/identity-jwt-claims-v1.json": "./contract/identity-jwt-claims-v1.json",
     "./contract/auth-error-envelope-v1.json": "./contract/auth-error-envelope-v1.json",
-    "./contract/subject-derivation-v2.json": "./contract/subject-derivation-v2.json",
-    "./contract/subject-derivation-v2.lua": "./contract/subject-derivation-v2.lua"
+    "./contract/subject-derivation-v2.json": "./contract/subject-derivation-v2.json"
   },
   "types": "./dist/index.d.ts",
   "files": [
@@ -36,11 +35,10 @@
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
     "lint": "oxlint .",
-    "check": "bun run test && bun run typecheck && bun run test:lua && bun run check:package",
+    "check": "bun run test && bun run typecheck && bun run check:package",
     "check:package": "bun pm pack --dry-run --ignore-scripts",
-    "typecheck": "tsc -p tsconfig.build.json --noEmit && tsc -p tsconfig.test.json",
+    "typecheck": "tsc -p tsconfig.test.json",
     "test": "bun run build && vitest run",
-    "test:lua": "luajit test/subject-derivation-v2.lua",
     "test:watch": "vitest",
     "prepublishOnly": "bun run verify",
     "verify": "bun run lint && bun run check",

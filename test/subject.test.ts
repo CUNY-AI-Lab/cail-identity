@@ -1,6 +1,4 @@
-import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -26,7 +24,7 @@ interface SubjectVector {
 }
 
 // SAFETY: this checked-in contract fixture is parsed only for the vector
-// fields asserted by the cross-language contract tests below.
+// fields asserted by the contract tests below.
 const vectorContract = JSON.parse(
   readFileSync(
     new URL("../contract/subject-derivation-v2.json", import.meta.url),
@@ -36,12 +34,8 @@ const vectorContract = JSON.parse(
   salt: string;
   vectors: SubjectVector[];
 };
-const luaVectorRunner = fileURLToPath(
-  new URL("./subject-derivation-v2.lua", import.meta.url),
-);
-
 describe("stable CAIL subject", () => {
-  it("matches the shared TypeScript and Lua v2 derivation vectors", async () => {
+  it("matches the shared v2 derivation vectors", async () => {
     for (const vector of vectorContract.vectors) {
       await expect(
         deriveCailSubject({
@@ -59,19 +53,6 @@ describe("stable CAIL subject", () => {
         }),
         vector.name,
       ).resolves.toBe(vector.operationalSubject);
-
-      const [canonical, ownershipMaterial, operationalMaterial] = execFileSync(
-        "luajit",
-        [luaVectorRunner, vector.issuer, vector.oidcSubject],
-        { encoding: "utf8" },
-      )
-        .trimEnd()
-        .split("\n");
-      expect(canonical, vector.name).toBe(vector.canonicalSubject);
-      expect(ownershipMaterial, vector.name).toBe(vector.ownershipMaterial);
-      expect(operationalMaterial, vector.name).toBe(
-        vector.operationalMaterial,
-      );
     }
   });
 
@@ -107,7 +88,7 @@ describe("stable CAIL subject", () => {
     await expect(
       deriveCailSubject({ ...options, oidcSubject: " @login.cuny.edu " }),
     ).rejects.toThrow("must not be empty");
-    // A trailing newline is ASCII whitespace: trimmed like the gate, not rejected.
+    // A trailing newline is ASCII whitespace, so it is trimmed rather than rejected.
     await expect(
       deriveCailSubject({ ...options, oidcSubject: "bob\n" }),
     ).resolves.toBe(
@@ -137,11 +118,10 @@ describe("stable CAIL subject", () => {
   });
 
   it("normalizes ASCII-only and never collides distinct non-ASCII subjects", async () => {
-    // Canonicalization is ASCII-only, matching the gate's byte-wise LuaJIT
-    // implementation. A Unicode-aware toUpperCase would fold these into
-    // colliding subjects (ß→SS, ı→I) — merging distinct people. They must
-    // stay distinct and pass through un-uppercased.
-    // Non-ASCII whitespace (NBSP) is NOT trimmed — ASCII %s only, like the gate.
+    // Canonicalization is ASCII-only. A Unicode-aware toUpperCase would fold
+    // these into colliding subjects (ß→SS, ı→I) — merging distinct people.
+    // They must stay distinct and pass through un-uppercased. Non-ASCII
+    // whitespace (NBSP) is not trimmed.
     // Distinct derived subjects follow from distinct canonical forms.
     const sharpS = await deriveCailSubject({ ...options, oidcSubject: "straße" });
     const latin = await deriveCailSubject({ ...options, oidcSubject: "strasse" });
