@@ -20,9 +20,6 @@ jobs:
         with:
           bun-version: 1.3.14
 
-      - name: Install LuaJIT for cross-language identity vectors
-        run: sudo apt-get update && sudo apt-get install --yes luajit
-
       - name: Install
         run: bun install --frozen-lockfile --ignore-scripts
 

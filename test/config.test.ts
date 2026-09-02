@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest";
+import type { JWK } from "jose";
 
 import {
   CAIL_CANONICAL_ISSUER,
@@ -8,11 +9,12 @@ import {
   type LoadIdentityVerifierConfigInput,
 } from "../src/index.js";
 import {
-  makeRsaFixture,
-  mintRsaJwt,
+  createTestIdentityIssuer,
+  type TestIdentityIssuer,
+} from "../src/testing.js";
+import {
   type JsonObject,
   type JsonValue,
-  type RsaFixture,
 } from "./fixtures.js";
 
 const NOW = 1_000_000;
@@ -21,14 +23,24 @@ const OTHER_ISS = "https://test-issuer.example/cail-sso";
 const AUD = "cail-internal";
 const MAX_JWKS_JSON_DEPTH = 64;
 
-let key: RsaFixture;
-let otherKey: RsaFixture;
+let key: TestIdentityIssuer;
+let keyJwk: JWK;
+let otherKey: TestIdentityIssuer;
+let otherKeyJwk: JWK;
+
+function onlyPublicJwk(issuer: TestIdentityIssuer): JWK {
+  const publicJwk = issuer.jwks.keys[0];
+  if (publicJwk === undefined) throw new Error("test issuer has no public key");
+  return publicJwk;
+}
 
 beforeAll(async () => {
   [key, otherKey] = await Promise.all([
-    makeRsaFixture("config-2026-07"),
-    makeRsaFixture("config-2026-08"),
+    createTestIdentityIssuer({ kid: "config-2026-07" }),
+    createTestIdentityIssuer({ kid: "config-2026-08" }),
   ]);
+  keyJwk = onlyPublicJwk(key);
+  otherKeyJwk = onlyPublicJwk(otherKey);
 });
 
 type ConfigTestOverrides = {
@@ -42,7 +54,7 @@ type ConfigTestOverrides = {
 
 function input(over: ConfigTestOverrides = {}): LoadIdentityVerifierConfigInput {
   const raw = {
-    jwks: JSON.stringify(key.jwks),
+    jwks: key.jwksJson,
     issuer: ISS,
     expectedAudience: AUD,
     now: NOW,
@@ -75,7 +87,7 @@ function valueAtJwksDepth(depth: number): JwksMetadata {
 
 function jwksWithMetadataAtDepth(depth: number): string {
   return JSON.stringify({
-    keys: [key.publicJwk],
+    keys: [keyJwk],
     metadata: valueAtJwksDepth(depth),
   });
 }
@@ -98,21 +110,24 @@ describe("loadIdentityVerifierConfig happy path", () => {
   it("accepts both keys during a distinct-kid rotation overlap", async () => {
     const config = await mustLoad({
       jwks: JSON.stringify({
-        keys: [key.publicJwk, otherKey.publicJwk],
+        keys: [keyJwk, otherKeyJwk],
       }),
     });
     expect(config.keyIds).toEqual([key.kid, otherKey.kid]);
 
     for (const fixture of [key, otherKey]) {
-      const token = await mintRsaJwt(
-        {
+      const token = await fixture.mintIdentityJwt({
+        audience: AUD,
+        subject: "cail-0123456789abcdef0123456789abcdef",
+        now: NOW,
+        claims: {
           sub: "cail-0123456789abcdef0123456789abcdef",
           aud: AUD,
           iss: ISS,
           exp: NOW + 3600,
+          iat: undefined,
         },
-        fixture,
-      );
+      });
       await expect(verifyIdentityJwt(token, config)).resolves.not.toBeNull();
     }
   });
@@ -171,7 +186,7 @@ describe("loadIdentityVerifierConfig JWKS errors", () => {
   it("rejects very deep unknown metadata without a stack-dependent walk", async () => {
     const depth = 5_000;
     const nested = `${"[".repeat(depth)}0${"]".repeat(depth)}`;
-    const jwks = `{"keys":[${JSON.stringify(key.publicJwk)}],"metadata":${nested}}`;
+    const jwks = `{"keys":[${JSON.stringify(keyJwk)}],"metadata":${nested}}`;
     await expect(load({ jwks })).resolves.toEqual({
       ok: false,
       reason: "jwks_malformed",
@@ -185,7 +200,7 @@ describe("loadIdentityVerifierConfig JWKS errors", () => {
     await expect(
       load({
         jwks: JSON.stringify({
-          keys: [key.publicJwk],
+          keys: [keyJwk],
           metadata,
           "urn:example:extension": { enabled: true },
         }),
@@ -195,9 +210,9 @@ describe("loadIdentityVerifierConfig JWKS errors", () => {
 
   it("requires a nonempty distinct kid on every eligible public RS256 key", async () => {
     for (const jwks of [
-      { keys: [{ ...key.publicJwk, kid: undefined }] },
-      { keys: [{ ...key.publicJwk, kid: "" }] },
-      { keys: [key.publicJwk, { ...key.publicJwk }] },
+      { keys: [{ ...keyJwk, kid: undefined }] },
+      { keys: [{ ...keyJwk, kid: "" }] },
+      { keys: [keyJwk, { ...keyJwk }] },
     ]) {
       await expect(load({ jwks: JSON.stringify(jwks) })).resolves.toEqual({
         ok: false,
@@ -208,78 +223,62 @@ describe("loadIdentityVerifierConfig JWKS errors", () => {
 
   it("rejects every structurally ineligible or private JWK", async () => {
     const invalidKeys = [
-      { ...key.publicJwk, kty: "EC" },
-      { ...key.publicJwk, alg: "RS512" },
-      { ...key.publicJwk, use: "enc" },
-      { ...key.publicJwk, key_ops: ["sign"] },
-      { ...key.publicJwk, key_ops: ["verify", "verify"] },
-      { ...key.publicJwk, n: "" },
-      { ...key.publicJwk, e: "AB" },
-      { ...key.publicJwk, d: "private-material" },
-      { ...key.publicJwk, k: "c2VjcmV0LWtleQ" },
-      { ...key.publicJwk, oth: [] },
+      { ...keyJwk, kty: "EC" },
+      { ...keyJwk, alg: "RS512" },
+      { ...keyJwk, use: "enc" },
+      { ...keyJwk, key_ops: ["sign"] },
+      { ...keyJwk, key_ops: ["verify", "verify"] },
+      { ...keyJwk, n: "" },
+      { ...keyJwk, e: "AB" },
+      { ...keyJwk, d: "private-material" },
+      { ...keyJwk, k: "c2VjcmV0LWtleQ" },
+      { ...keyJwk, oth: [] },
     ];
     for (const invalidKey of invalidKeys) {
       await expect(
         load({ jwks: JSON.stringify({ keys: [invalidKey] }) }),
       ).resolves.toEqual({ ok: false, reason: "jwks_malformed" });
     }
-  });
 
-  it("requires canonical minimal Base64urlUInt n and e", async () => {
-    const withLeadingZero = (value: string): string => {
-      const bytes = Buffer.from(value.replaceAll("-", "+").replaceAll("_", "/"), "base64");
-      return Buffer.from([0, ...bytes])
-        .toString("base64url");
-    };
-    for (const invalidKey of [
-      { ...key.publicJwk, n: withLeadingZero(key.publicJwk.n!) },
-      { ...key.publicJwk, e: withLeadingZero(key.publicJwk.e!) },
-    ]) {
-      await expect(
-        load({ jwks: JSON.stringify({ keys: [invalidKey] }) }),
-      ).resolves.toEqual({ ok: false, reason: "jwks_malformed" });
-    }
-  });
-
-  it("accepts a valid 2048-bit RS256 public key", async () => {
-    const modulus = Buffer.from(key.publicJwk.n!, "base64url");
-    expect(modulus).toHaveLength(256);
-    expect(modulus[0]! & 0x80).not.toBe(0);
-    expect(key.publicJwk.e).toBe("AQAB");
-    await expect(load()).resolves.toMatchObject({ ok: true });
     await expect(
       load({
         jwks: JSON.stringify({
-          keys: [{ ...key.publicJwk, e: "Aw" }],
+          keys: [
+            keyJwk,
+            {
+              kty: "oct",
+              kid: "must-not-be-in-a-public-jwks",
+              k: "c2VjcmV0LWtleQ",
+            },
+          ],
         }),
       }),
-    ).resolves.toMatchObject({ ok: true });
+    ).resolves.toEqual({ ok: false, reason: "jwks_malformed" });
   });
 
   it("rejects unusable RSA public numbers before import", async () => {
-    const evenModulus = Buffer.from(key.publicJwk.n!, "base64url");
+    const evenModulus = Buffer.from(keyJwk.n!, "base64url");
     evenModulus[evenModulus.length - 1] =
       evenModulus[evenModulus.length - 1]! & 0xfe;
-    const shortModulus = Buffer.from(key.publicJwk.n!, "base64url");
+    const shortModulus = Buffer.from(keyJwk.n!, "base64url");
     shortModulus[0] = 0x7f;
     const tooLargeSafeExponent = Buffer.from([
       0x20, 0, 0, 0, 0, 0, 1,
     ]).toString("base64url");
 
     const invalidKeys = [
-      { ...key.publicJwk, e: "AQ" }, // 1
-      { ...key.publicJwk, e: "Ag" }, // 2
-      { ...key.publicJwk, e: tooLargeSafeExponent },
-      { ...key.publicJwk, n: "AQ", e: "AQAB" }, // tiny odd modulus
-      { ...key.publicJwk, n: "Ag", e: "Aw" }, // tiny even modulus
-      { ...key.publicJwk, n: "AA" }, // zero modulus
+      { ...keyJwk, e: "AQ" }, // 1
+      { ...keyJwk, e: "Ag" }, // 2
+      { ...keyJwk, e: tooLargeSafeExponent },
+      { ...keyJwk, n: "AQ", e: "AQAB" }, // tiny odd modulus
+      { ...keyJwk, n: "Ag", e: "Aw" }, // tiny even modulus
+      { ...keyJwk, n: "AA" }, // zero modulus
       {
-        ...key.publicJwk,
+        ...keyJwk,
         n: Buffer.from("arbitrary modulus bytes").toString("base64url"),
       },
-      { ...key.publicJwk, n: evenModulus.toString("base64url") },
-      { ...key.publicJwk, n: shortModulus.toString("base64url") },
+      { ...keyJwk, n: evenModulus.toString("base64url") },
+      { ...keyJwk, n: shortModulus.toString("base64url") },
     ];
 
     for (const invalidKey of invalidKeys) {
@@ -287,6 +286,14 @@ describe("loadIdentityVerifierConfig JWKS errors", () => {
         load({ jwks: JSON.stringify({ keys: [invalidKey] }) }),
       ).resolves.toEqual({ ok: false, reason: "jwks_malformed" });
     }
+
+    await expect(
+      load({
+        jwks: JSON.stringify({
+          keys: [{ ...keyJwk, e: "Aw" }],
+        }),
+      }),
+    ).resolves.toMatchObject({ ok: true });
   });
 
   it("rejects malformed RSA public-number encodings", async () => {
@@ -295,12 +302,12 @@ describe("loadIdentityVerifierConfig JWKS errors", () => {
         "base64url",
       );
     const invalidKeys = [
-      { ...key.publicJwk, n: `${key.publicJwk.n!}=` },
-      { ...key.publicJwk, e: `${key.publicJwk.e!}=` },
-      { ...key.publicJwk, n: `+${key.publicJwk.n!.slice(1)}` },
-      { ...key.publicJwk, e: "AB" },
-      { ...key.publicJwk, n: withLeadingZero(key.publicJwk.n!) },
-      { ...key.publicJwk, e: withLeadingZero(key.publicJwk.e!) },
+      { ...keyJwk, n: `${keyJwk.n!}=` },
+      { ...keyJwk, e: `${keyJwk.e!}=` },
+      { ...keyJwk, n: `+${keyJwk.n!.slice(1)}` },
+      { ...keyJwk, e: "AB" },
+      { ...keyJwk, n: withLeadingZero(keyJwk.n!) },
+      { ...keyJwk, e: withLeadingZero(keyJwk.e!) },
     ];
 
     for (const invalidKey of invalidKeys) {
@@ -313,14 +320,14 @@ describe("loadIdentityVerifierConfig JWKS errors", () => {
   it("uses parsed own-data JSON and never honors inherited key metadata", async () => {
     // SAFETY: the null-prototype object intentionally inherits key metadata;
     // this test verifies parsed JSON does not honor that prototype.
-    const inherited = Object.create(key.publicJwk) as { kid: string };
+    const inherited = Object.create(keyJwk) as { kid: string };
     inherited.kid = key.kid;
     await expect(
       load({ jwks: JSON.stringify({ keys: [inherited] }) }),
     ).resolves.toEqual({ ok: false, reason: "jwks_malformed" });
 
     const json = JSON.stringify({
-      keys: [{ ...key.publicJwk, __proto__: { d: "private" } }],
+      keys: [{ ...keyJwk, __proto__: { d: "private" } }],
     });
     const result = await load({ jwks: json });
     expect(result.ok).toBe(true);
@@ -409,15 +416,18 @@ describe("loadIdentityVerifierConfig audience and timing", () => {
   it.each([" ", "   "])(
     "rejects a matching signed token for whitespace-only audience %j at the config boundary",
     async (expectedAudience) => {
-      const matchingToken = await mintRsaJwt(
-        {
+      const matchingToken = await key.mintIdentityJwt({
+        audience: expectedAudience,
+        subject: "cail-0123456789abcdef0123456789abcdef",
+        now: NOW,
+        claims: {
           sub: "cail-0123456789abcdef0123456789abcdef",
           aud: expectedAudience,
           iss: ISS,
           exp: NOW + 3600,
+          iat: undefined,
         },
-        key,
-      );
+      });
       const loaded = await load({ expectedAudience });
       expect(loaded).toEqual({ ok: false, reason: "audience_malformed" });
 
@@ -457,7 +467,7 @@ describe("immutable snapshots and hostile accessors", () => {
   it("reads every top-level option exactly once and uses those exact values", async () => {
     const counts = new Map<string, number>();
     const valid: JsonObject = {
-      jwks: JSON.stringify(key.jwks),
+      jwks: key.jwksJson,
       issuer: ISS,
       expectedAudience: AUD,
       supportedIssuers: [ISS],

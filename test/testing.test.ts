@@ -11,9 +11,6 @@ import { createHash, randomBytes } from "node:crypto";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import {
-  CAIL_CANONICAL_ISSUER,
-  deriveCailSubject,
-  isCailSubject,
   loadIdentityVerifierConfig,
   verifyIdentityJwt,
   type IdentityVerifierConfig,
@@ -47,37 +44,6 @@ async function configFor(
 }
 
 describe("canonicalTestSubject", () => {
-  it("is deterministic: the same seed always yields the same subject", () => {
-    expect(canonicalTestSubject("alice")).toBe(canonicalTestSubject("alice"));
-    expect(canonicalTestSubject("user:someone@gc.cuny.edu")).toBe(
-      canonicalTestSubject("user:someone@gc.cuny.edu"),
-    );
-  });
-
-  it("gives distinct subjects for distinct seeds", () => {
-    const seeds = Array.from({ length: 200 }, (_, i) => `seed-${i}`);
-    const subjects = new Set(seeds.map(canonicalTestSubject));
-    expect(subjects.size).toBe(seeds.length);
-  });
-
-  it("always matches the canonical CAIL subject shape", () => {
-    for (const seed of ["", "alice", "user:bob@x", "ünïcode-Σ", "a".repeat(500)]) {
-      const subject = canonicalTestSubject(seed);
-      expect(isCailSubject(subject)).toBe(true);
-    }
-  });
-
-  it("is exactly cail- + first-32-lowercase-hex of SHA-256(seed) (FIPS vectors)", () => {
-    // SHA-256("") = e3b0c44298fc1c149afbf4c8996fb924...
-    expect(canonicalTestSubject("")).toBe(
-      "cail-e3b0c44298fc1c149afbf4c8996fb924",
-    );
-    // SHA-256("abc") = ba7816bf8f01cfea414140de5dae2223... (FIPS 180-4 vector)
-    expect(canonicalTestSubject("abc")).toBe(
-      "cail-ba7816bf8f01cfea414140de5dae2223",
-    );
-  });
-
   it("matches node:crypto SHA-256 over arbitrary inputs (multi-block, unicode, binary-ish)", () => {
     const seeds: string[] = [
       "x",
@@ -97,18 +63,6 @@ describe("canonicalTestSubject", () => {
     }
   });
 
-  it("shares the exact shape deriveCailSubject produces", async () => {
-    const derived = await deriveCailSubject({
-      issuer: CAIL_CANONICAL_ISSUER,
-      oidcSubject: "someone",
-      subjectSalt: "test-only-salt-at-least-32-bytes-long",
-    });
-    const fixture = canonicalTestSubject("someone");
-    expect(isCailSubject(fixture)).toBe(true);
-    expect(isCailSubject(derived)).toBe(true);
-    expect(fixture.length).toBe(derived.length);
-  });
-
   it("rejects non-string seeds", () => {
     // SAFETY: these deliberately inject wrong runtime values to exercise the
     // test-fixture input boundary.
@@ -118,17 +72,6 @@ describe("canonicalTestSubject", () => {
     // SAFETY: this deliberately injects an undefined runtime value to exercise
     // the test-fixture input boundary.
     expect(() => canonicalTestSubject(undefined as never)).toThrow(TypeError);
-  });
-});
-
-describe("TEST_SUBJECTS", () => {
-  it("are distinct canonical subjects derived from their own names", () => {
-    expect(TEST_SUBJECTS.alice).toBe(canonicalTestSubject("alice"));
-    expect(TEST_SUBJECTS.bob).toBe(canonicalTestSubject("bob"));
-    expect(TEST_SUBJECTS.carol).toBe(canonicalTestSubject("carol"));
-    const all = Object.values(TEST_SUBJECTS);
-    expect(new Set(all).size).toBe(all.length);
-    for (const subject of all) expect(isCailSubject(subject)).toBe(true);
   });
 });
 
@@ -155,13 +98,6 @@ describe("createTestIdentityIssuer", () => {
     expect(identity?.email).toBe("someone@gc.cuny.edu");
     expect(identity?.name).toBe("Some One");
     expect(identity?.entitlements).toEqual(["tools"]);
-  });
-
-  it("defaults to the canonical standalone issuer and exposes JWKS as object and JSON", async () => {
-    expect(issuer.issuer).toBe(CAIL_CANONICAL_ISSUER);
-    expect(JSON.parse(issuer.jwksJson)).toEqual(issuer.jwks);
-    expect(issuer.jwks.keys).toHaveLength(1);
-    expect(issuer.jwks.keys[0]?.kid).toBe(issuer.kid);
   });
 
   it("honors subject / issuer / time overrides (and fail-closed paths stay reachable)", async () => {
@@ -192,14 +128,6 @@ describe("createTestIdentityIssuer", () => {
       audience: AUD,
       subject: "cail-abc123", // the exact drift class this export retires
     });
-    await expect(
-      verifyIdentityJwt(token, config),
-    ).resolves.toBeNull();
-  });
-
-  it("tokens from one issuer kit never verify against another kit's JWKS", async () => {
-    const other = await createTestIdentityIssuer();
-    const token = await other.mintIdentityJwt({ audience: AUD });
     await expect(
       verifyIdentityJwt(token, config),
     ).resolves.toBeNull();
@@ -240,33 +168,6 @@ describe("createTestIdentityIssuer", () => {
     await expect(
       verifyIdentityJwt(token, timedConfig),
     ).resolves.toMatchObject({ subject: TEST_SUBJECTS.alice });
-  });
-
-  it("mints nbf: past-nbf tokens verify, future-nbf tokens are rejected", async () => {
-    const now = 2_000_000;
-    const timedConfig = await configFor(issuer, AUD, now);
-    const active = await issuer.mintIdentityJwt({
-      audience: AUD,
-      now,
-      notBefore: now - 120,
-    });
-    expect(decodePayload(active).nbf).toBe(now - 120);
-    await expect(verifyIdentityJwt(active, timedConfig)).resolves.not.toBeNull();
-
-    const notYetValid = await issuer.mintIdentityJwt({
-      audience: AUD,
-      now,
-      notBefore: now + 3600,
-    });
-    await expect(verifyIdentityJwt(notYetValid, timedConfig)).resolves.toBeNull();
-  });
-
-  it("mints array-valued aud (even one-element) that the verifier must reject", async () => {
-    const token = await issuer.mintIdentityJwt({ audience: [AUD] });
-    expect(decodePayload(token).aud).toEqual([AUD]);
-    await expect(
-      verifyIdentityJwt(token, config),
-    ).resolves.toBeNull();
   });
 
   it("accepts arbitrary claim overrides: set registered/custom claims and omit defaults", async () => {

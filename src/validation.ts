@@ -1,7 +1,5 @@
 import * as z from "zod/mini";
 
-const BOOLEAN_SCHEMA = z.boolean();
-const CALLABLE_SCHEMA = z.function();
 const NUMBER_SCHEMA = z.number();
 const STRING_SCHEMA = z.string();
 
@@ -15,16 +13,6 @@ type RuntimeProperty =
   | symbol
   | undefined;
 
-export function booleanFrom<Value>(value: Value): boolean | undefined {
-  const result = BOOLEAN_SCHEMA.safeParse(value);
-  return result.success ? result.data : undefined;
-}
-
-export function callableFrom<Value>(value: Value) {
-  const result = CALLABLE_SCHEMA.safeParse(value);
-  return result.success ? result.data : undefined;
-}
-
 export function numberFrom<Value>(value: Value): number | undefined {
   const result = NUMBER_SCHEMA.safeParse(value);
   return result.success ? result.data : undefined;
@@ -33,6 +21,14 @@ export function numberFrom<Value>(value: Value): number | undefined {
 export function stringFrom<Value>(value: Value): string | undefined {
   const result = STRING_SCHEMA.safeParse(value);
   return result.success ? result.data : undefined;
+}
+
+export function containsControlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
 }
 
 export function unknownArrayFrom<Value>(value: Value) {

@@ -115,9 +115,8 @@ obtained from a verified CUNY token or trusted user-info response. The salt is a
 server secret containing at least 32 UTF-8 bytes. The salt and all options are
 read once, and the exact validated salt bytes are passed to Web Crypto; the
 issuer namespaces otherwise identical subjects. Inputs that canonicalize to
-empty or retain an ASCII control
-character are rejected; the Lua and TypeScript output vectors cover the
-accepted production CUNY shapes.
+empty or retain an ASCII control character are rejected; the TypeScript output
+vectors cover the accepted production CUNY shapes.
 
 The v2 framing intentionally changes every derived user ownership ID from the
 delimiter-based v1 result. The package contains no migration, aliasing,
@@ -125,9 +124,8 @@ backfill, or dual-read behavior. Doorway is the current trusted derivation
 boundary and uses this package's v2 algorithm for CUNY sign-in and its private
 subject-derivation entrypoint. Other stores and consumers must reconcile their
 own persisted ownership data before changing derivation inputs or salts. The
-language-neutral `contract/subject-derivation-v2.json` vectors and adjacent Lua
-reference support independent implementations without assigning derivation to
-the Gateway.
+language-neutral `contract/subject-derivation-v2.json` vectors support
+independent implementations without assigning derivation to the Gateway.
 
 ## Stable app-principal subject (ADR-0007)
 
@@ -273,8 +271,8 @@ boundary only. Doorway derives the canonical subject from verified CUNY OIDC
 input and mints audience-bound identity JWTs. Application code, including the
 Gateway, does not derive a person from provider input; it consumes the
 canonical subject only after verifying the appropriate identity or Registry
-boundary. `contract/subject-derivation-v2.json` and its adjacent Lua reference
-provide common vectors for any separately reviewed non-TypeScript producer.
+boundary. `contract/subject-derivation-v2.json` provides common vectors for any
+separately reviewed non-TypeScript producer.
 
 This package does not provide sessions, CAIL API keys, model routing, quotas,
 or custom error handling.
@@ -397,8 +395,8 @@ bun audit
 
 `bun run verify` first runs the vendored full generic
 [anti-slop](https://github.com/dmmulroy/anti-slop) profile, then builds the
-package, runs the TypeScript and standalone LuaJIT derivation tests, and checks
-the package contents. Resolve lint findings at the parsing or contract
+package, runs the TypeScript tests, typechecks the test project, and checks the
+package contents. Resolve lint findings at the parsing or contract
 boundary; do not suppress them, hide them behind generic wrappers, or add a
 `SAFETY` comment unless it names the runtime invariant established immediately
 before the assertion. The vendored source and upstream commit are recorded in
