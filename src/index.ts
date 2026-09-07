@@ -22,6 +22,7 @@ import { base64url, importJWK, jwtVerify } from "jose";
 
 import { CAIL_CANONICAL_ORIGIN } from "./auth-error.js";
 import {
+  containsControlCharacter,
   numberFrom,
   plainRecordFrom,
   stringFrom,
@@ -62,13 +63,6 @@ export function isCailSubject<Value>(value: Value): value is Value & string {
 }
 
 const CUNY_LOGIN_REALM = "@LOGIN.CUNY.EDU";
-function containsControlCharacter(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code <= 0x1f || code === 0x7f) return true;
-  }
-  return false;
-}
 // ASCII whitespace only — the exact set LuaJIT's `%s` pattern trims in the gate
 // (space, tab, newline, vertical tab, form feed, carriage return).
 const ASCII_WHITESPACE = /^[ \t\n\v\f\r]+|[ \t\n\v\f\r]+$/g;
@@ -369,10 +363,6 @@ function isPlainObject<Value>(value: Value): value is Value & JsonRecord {
   return plainRecordFrom(value) !== undefined;
 }
 
-function ownProp<Value>(obj: Value, key: string) {
-  return snapshotOwnProperty(obj, key);
-}
-
 function isFiniteNumber<Value>(value: Value): value is Value & number {
   const number = numberFrom(value);
   return number !== undefined && Number.isFinite(number);
@@ -466,11 +456,11 @@ function inspectCailJwt(token: string): InspectedJwt | null {
     const header = parseJsonRecord(decoder.decode(decoded[0]!));
     const payload = parseJsonRecord(decoder.decode(decoded[1]!));
     if (header === null || payload === null) return null;
-    if (ownProp(header, "alg") !== "RS256") return null;
-    const kid = stringFrom(ownProp(header, "kid"));
+    if (snapshotOwnProperty(header, "alg") !== "RS256") return null;
+    const kid = stringFrom(snapshotOwnProperty(header, "kid"));
     if (kid === undefined || kid === "") return null;
     if (Object.hasOwn(header, "crit")) return null;
-    const b64 = ownProp(header, "b64");
+    const b64 = snapshotOwnProperty(header, "b64");
     if (b64 !== undefined && b64 !== true) return null;
 
     return { header, payload };
@@ -523,20 +513,20 @@ interface EligibleRsaVerificationJwk {
 function snapshotRsaVerificationJwk(
   value: JsonRecord,
 ): EligibleRsaVerificationJwk | null {
-  const kid = stringFrom(ownProp(value, "kid"));
+  const kid = stringFrom(snapshotOwnProperty(value, "kid"));
   if (
-    ownProp(value, "kty") !== "RSA" ||
+    snapshotOwnProperty(value, "kty") !== "RSA" ||
     kid === undefined ||
     kid === ""
   ) {
     return null;
   }
 
-  const alg = ownProp(value, "alg");
+  const alg = snapshotOwnProperty(value, "alg");
   if (alg !== undefined && alg !== "RS256") return null;
-  const use = ownProp(value, "use");
+  const use = snapshotOwnProperty(value, "use");
   if (use !== undefined && use !== "sig") return null;
-  const keyOps = ownProp(value, "key_ops");
+  const keyOps = snapshotOwnProperty(value, "key_ops");
   if (keyOps !== undefined) {
     const keyOpsSnapshot = snapshotStringArray(keyOps);
     if (
@@ -549,8 +539,8 @@ function snapshotRsaVerificationJwk(
   }
   if (containsPrivateJwkMaterial(value)) return null;
 
-  const modulus = decodeCanonicalBase64urlUInt(ownProp(value, "n"));
-  const exponent = decodeCanonicalBase64urlUInt(ownProp(value, "e"));
+  const modulus = decodeCanonicalBase64urlUInt(snapshotOwnProperty(value, "n"));
+  const exponent = decodeCanonicalBase64urlUInt(snapshotOwnProperty(value, "e"));
   if (
     modulus === null ||
     exponent === null ||
@@ -636,11 +626,11 @@ function snapshotVerifierConfigOptions<Value>(
   try {
     if (!isPlainObject(input)) return null;
     return {
-      jwks: ownProp(input, "jwks"),
-      issuer: ownProp(input, "issuer"),
-      expectedAudience: ownProp(input, "expectedAudience"),
-      supportedIssuers: ownProp(input, "supportedIssuers"),
-      now: ownProp(input, "now"),
+      jwks: snapshotOwnProperty(input, "jwks"),
+      issuer: snapshotOwnProperty(input, "issuer"),
+      expectedAudience: snapshotOwnProperty(input, "expectedAudience"),
+      supportedIssuers: snapshotOwnProperty(input, "supportedIssuers"),
+      now: snapshotOwnProperty(input, "now"),
       clockToleranceSeconds: snapshotOwnProperty(
         input,
         "clockToleranceSeconds",
@@ -736,7 +726,7 @@ export async function loadIdentityVerifierConfig(
   if (!isWithinJwksJsonDepth(parsedJwks)) {
     return { ok: false, reason: "jwks_malformed" };
   }
-  const keys = ownProp(parsedJwks, "keys");
+  const keys = snapshotOwnProperty(parsedJwks, "keys");
   const keyArray = unknownArrayFrom(keys);
   if (keyArray === undefined || keyArray.length === 0) {
     return { ok: false, reason: "jwks_malformed" };
@@ -785,13 +775,10 @@ export async function loadIdentityVerifierConfig(
   if (raw.expectedAudience === undefined || raw.expectedAudience === "") {
     return { ok: false, reason: "audience_missing" };
   }
-  const expectedAudience = stringFrom(raw.expectedAudience);
-  if (expectedAudience === undefined || expectedAudience === "") {
+  if (!isValidAudience(raw.expectedAudience)) {
     return { ok: false, reason: "audience_malformed" };
   }
-  if (!isValidAudience(expectedAudience)) {
-    return { ok: false, reason: "audience_malformed" };
-  }
+  const expectedAudience = raw.expectedAudience;
 
   let now: number | undefined;
   if (raw.now !== undefined) {
@@ -857,16 +844,16 @@ async function verifyIdentityJwtInternal<Value>(
   const inspected = inspectCailJwt(tokenText);
   if (!inspected) return null;
 
-  const kid = stringFrom(ownProp(inspected.header, "kid"));
+  const kid = stringFrom(snapshotOwnProperty(inspected.header, "kid"));
   if (kid === undefined) return null;
   const key = config.keysByKid.get(kid);
   if (key === undefined) return null;
 
-  const exp = ownProp(inspected.payload, "exp");
-  const aud = ownProp(inspected.payload, "aud");
-  const iss = ownProp(inspected.payload, "iss");
-  const nbf = ownProp(inspected.payload, "nbf");
-  const sub = ownProp(inspected.payload, "sub");
+  const exp = snapshotOwnProperty(inspected.payload, "exp");
+  const aud = snapshotOwnProperty(inspected.payload, "aud");
+  const iss = snapshotOwnProperty(inspected.payload, "iss");
+  const nbf = snapshotOwnProperty(inspected.payload, "nbf");
+  const sub = snapshotOwnProperty(inspected.payload, "sub");
   if (!isFiniteNumber(exp)) return null;
   if (!hasExactAudience(aud, config.expectedAudience)) return null;
   const issuer = stringFrom(iss);
@@ -890,10 +877,10 @@ async function verifyIdentityJwtInternal<Value>(
     return null;
   }
 
-  const email = ownProp(inspected.payload, "email");
-  const name = ownProp(inspected.payload, "name");
-  const entitlements = ownProp(inspected.payload, "entitlements");
-  const operationalSubject = ownProp(inspected.payload, "log_sub");
+  const email = snapshotOwnProperty(inspected.payload, "email");
+  const name = snapshotOwnProperty(inspected.payload, "name");
+  const entitlements = snapshotOwnProperty(inspected.payload, "entitlements");
+  const operationalSubject = snapshotOwnProperty(inspected.payload, "log_sub");
   if (
     operationalSubject !== undefined &&
     !isCailOperationalSubject(operationalSubject)

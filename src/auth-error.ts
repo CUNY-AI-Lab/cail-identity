@@ -1,6 +1,10 @@
 import * as z from "zod/mini";
 
-import { plainRecordFrom, stringFrom } from "./validation.js";
+import {
+  containsControlCharacter,
+  plainRecordFrom,
+  stringFrom,
+} from "./validation.js";
 
 /** The single production origin that may receive a browser launch. */
 export const CAIL_CANONICAL_ORIGIN =
@@ -31,14 +35,6 @@ export interface CailAuthErrorEnvelope {
 }
 
 const LAUNCH_SEGMENT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._~-]*$/;
-
-function containsControlCharacter(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code <= 0x1f || code === 0x7f) return true;
-  }
-  return false;
-}
 
 function isSafeLaunchPath(value: string): boolean {
   if (
