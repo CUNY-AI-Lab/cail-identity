@@ -1,5 +1,4 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { readFile } from "node:fs/promises";
 import {
   CAIL_AUTH_ERROR_CODES,
   CAIL_CANONICAL_ISSUER,
@@ -24,19 +23,9 @@ const NOW = 1_000_000;
 const AUD = "cail:package-test";
 
 let fixture: RsaFixture;
-let packageMetadata: JsonObject;
 
 beforeAll(async () => {
-  [fixture, packageMetadata] = await Promise.all([
-    makeRsaFixture("package-entry"),
-    readFile(new URL("../package.json", import.meta.url), "utf8").then(
-      (value) => {
-        // SAFETY: package.json is the checked-in package manifest and this
-        // test reads only its JSON object metadata fields below.
-        return JSON.parse(value) as JsonObject;
-      },
-    ),
-  ]);
+  fixture = await makeRsaFixture("package-entry");
 });
 
 function claims(aud: JsonValue = AUD): JsonObject {
@@ -62,23 +51,6 @@ describe("published package entry", () => {
     expect(CAIL_AUTH_ERROR_CODES).toContain("authentication_required");
     expect(createCailAuthError).toBeTypeOf("function");
     expect(parseCailAuthErrorJson).toBeTypeOf("function");
-  });
-
-  it("publishes to GitHub Packages under the @cuny-ai-lab scope", () => {
-    expect(packageMetadata.publishConfig).toEqual({
-      registry: "https://npm.pkg.github.com",
-      access: "restricted",
-    });
-    expect(packageMetadata.repository).toEqual({
-      type: "git",
-      url: "git+https://github.com/CUNY-AI-Lab/cail-identity.git",
-    });
-    expect(packageMetadata).toMatchObject({
-      exports: {
-        "./contract/auth-error-envelope-v1.json":
-          "./contract/auth-error-envelope-v1.json",
-      },
-    });
   });
 
   it("verifies a valid identity through the package entry", async () => {

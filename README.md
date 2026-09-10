@@ -36,9 +36,8 @@ Pin an exact published release, then run `bun install` with
 that has `read:packages`. CI may supply the same environment variable from a
 secret. Maintainers keep the same registry and authentication configuration
 outside the repository, set `NPM_CONFIG_TOKEN` to a classic PAT with
-`write:packages`, verify with `bun publish --dry-run`, and release with
-`bun publish`. GitHub Actions may instead use its repository `GITHUB_TOKEN`
-with `packages: write`.
+`write:packages`. Releases use the workflow described below. GitHub Actions
+uses its repository `GITHUB_TOKEN` with `packages: write`.
 
 ## Auth and SSO failure envelope
 
@@ -398,7 +397,12 @@ bun audit
 `bun run verify` first runs the vendored full generic
 [anti-slop](https://github.com/dmmulroy/anti-slop) profile, then builds the
 package, runs the TypeScript and standalone LuaJIT derivation tests, and checks
-the package contents. Resolve lint findings at the parsing or contract
+an actual packed tarball installed in a disposable consumer with lifecycle
+scripts disabled. The consumer exercises public runtime and testing exports,
+packaged JSON and Lua contracts, subject derivation, and valid and wrong-audience
+JWTs, then typechecks those imports against installed declarations. CI runs the
+consumer on Node 20; lint uses Bun to load the TypeScript Oxlint configuration.
+Resolve lint findings at the parsing or contract
 boundary; do not suppress them, hide them behind generic wrappers, or add a
 `SAFETY` comment unless it names the runtime invariant established immediately
 before the assertion. The vendored source and upstream commit are recorded in
@@ -407,9 +411,11 @@ before the assertion. The vendored source and upstream commit are recorded in
 `bun run check` runs the package checks without linting. The build output ships
 in the published package, so consumers install without a build step.
 Publishing a stable (non-prerelease) GitHub release whose tag matches `v` plus
-the package version publishes that release source to GitHub Packages with the
-repository's workflow token. Package publication does not update a production
-deployment.
+the package version runs verification once and publishes the same tested
+`.release/package.tgz` to GitHub Packages with the repository's workflow token.
+Bun skips lifecycle scripts when publishing an existing tarball; direct
+directory publication retains the `prepublishOnly` verification hook. Package
+publication does not update a production deployment.
 
 ## License
 
