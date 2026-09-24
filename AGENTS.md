@@ -1,5 +1,9 @@
 # cail-identity
 
+## Recommended CAIL fleet practice
+
+For the colleague-facing engineering and agent-review defaults, see the [CAIL Fleet Engineering and Review Practice](https://github.com/CUNY-AI-Lab/cail-knowledge-base/pull/27). This is recommended unless this repository's own contract or CI makes a rule mandatory. Use Luna workers for bounded independent tasks and Astra for an independent review of substantial or load-bearing changes; keep one primary owner responsible for the combined result and real-path verification.
+
 - Owns stable CAIL subject derivation for trusted authentication boundaries and exact RS256 identity-JWT verification from supplied JWKS material.
 - `deriveCailSubject` and app-subject helpers accept trusted issuer/subject inputs; they never authenticate request data or headers.
 - Load verifier configuration first; only its immutable snapshot may reach `verifyIdentityJwt`.
