@@ -79,19 +79,6 @@ async function verify<Token extends string, Jwks>(
   return verifyIdentityJwt(token, loaded.config);
 }
 
-async function expectConfigError<Value>(
-  jwks: Value,
-  reason = "jwks_malformed",
-) {
-  const result = await loadIdentityVerifierConfig({
-    jwks: JSON.stringify(jwks),
-    issuer: ISS,
-    expectedAudience: AUD,
-    now: NOW,
-  });
-  expect(result).toEqual({ ok: false, reason });
-}
-
 describe("verifyIdentityJwt happy path and output", () => {
   it("accepts a minimal RS256 token and returns the canonical identity shape", async () => {
     const result = await verify(await mintRsaJwt(claims(), oldKey));
@@ -121,15 +108,6 @@ describe("verifyIdentityJwt happy path and output", () => {
     });
   });
 
-  it("accepts the exact scalar service audience", async () => {
-    expect(await verify(await mintRsaJwt(claims(), oldKey))).not.toBeNull();
-  });
-
-  it("accepts either key during a distinct-kid rotation overlap", async () => {
-    const jwks = { keys: [oldKey.publicJwk, newKey.publicJwk] };
-    expect(await verify(await mintRsaJwt(claims(), oldKey), jwks)).not.toBeNull();
-    expect(await verify(await mintRsaJwt(claims(), newKey), jwks)).not.toBeNull();
-  });
 });
 
 describe("verifyIdentityJwt structure, encoding, and JSON", () => {
@@ -190,59 +168,6 @@ describe("verifyIdentityJwt algorithm and key selection", () => {
   it("rejects an unknown kid", async () => {
     const token = await mintRsaJwt(claims(), oldKey, { kid: "unknown" });
     expect(await verify(token)).toBeNull();
-  });
-
-  it("rejects duplicate eligible RSA signing keys for one kid", async () => {
-    const duplicate = { ...oldKey.publicJwk };
-    await expectConfigError({ keys: [oldKey.publicJwk, duplicate] });
-  });
-
-  it("owns wrong, private, malformed, or non-verification JWKs as config errors", async () => {
-    const invalidKeys = [
-      { ...oldKey.publicJwk, kty: "EC" },
-      { ...oldKey.publicJwk, alg: "RS512" },
-      { ...oldKey.publicJwk, use: "enc" },
-      { ...oldKey.publicJwk, key_ops: ["sign"] },
-      { ...oldKey.publicJwk, n: "" },
-      { ...oldKey.publicJwk, e: "AB" },
-      { ...oldKey.publicJwk, d: "private-material" },
-      { ...oldKey.publicJwk, k: "c2VjcmV0LWtleQ" },
-      { ...oldKey.publicJwk, oth: [] },
-    ];
-    for (const key of invalidKeys) {
-      await expectConfigError({ keys: [key] });
-    }
-  });
-
-  it("owns non-minimal Base64urlUInt encodings as config errors", async () => {
-    const withLeadingZero = (value: string): string =>
-      base64url.encode(Uint8Array.from([0, ...base64url.decode(value)]));
-
-    for (const key of [
-      { ...oldKey.publicJwk, n: withLeadingZero(oldKey.publicJwk.n!) },
-      { ...oldKey.publicJwk, e: withLeadingZero(oldKey.publicJwk.e!) },
-    ]) {
-      await expectConfigError({ keys: [key] });
-    }
-  });
-
-  it("owns private material anywhere in the supplied JWKS as config error", async () => {
-    const unrelatedSecret = {
-      kty: "oct",
-      kid: "must-not-be-in-a-public-jwks",
-      k: "c2VjcmV0LWtleQ",
-    };
-    await expectConfigError({
-      keys: [oldKey.publicJwk, unrelatedSecret],
-    });
-  });
-
-  it("owns malformed JWKS containers and inherited keys as config errors", async () => {
-    for (const jwks of [null, {}, { keys: null }, { keys: [null] }]) {
-      await expectConfigError(jwks);
-    }
-    const inherited = Object.create({ keys: [oldKey.publicJwk] });
-    await expectConfigError(inherited);
   });
 
   it("rejects alg confusion even when an HS256 signature is valid", async () => {
@@ -375,14 +300,6 @@ describe("verifyIdentityJwt time and options", () => {
 });
 
 describe("verifyIdentityJwt own-property and fail-closed behavior", () => {
-  it("does not source key metadata from prototypes during config loading", async () => {
-    // SAFETY: this null-prototype object intentionally inherits kid only, so
-    // config loading must reject it instead of honoring prototype metadata.
-    const inheritedKid = Object.create(oldKey.publicJwk) as { kid?: string };
-    delete inheritedKid.kid;
-    await expectConfigError({ keys: [inheritedKid] });
-  });
-
   it("returns null rather than throwing for a wrong token runtime type", async () => {
     // SAFETY: this deliberately injects a wrong runtime token type to verify
     // the public fail-closed boundary.

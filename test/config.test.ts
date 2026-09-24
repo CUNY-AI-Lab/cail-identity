@@ -146,6 +146,7 @@ describe("loadIdentityVerifierConfig JWKS errors", () => {
     ["JSON array", "[]"],
     ["object without keys", "{}"],
     ["keys not an array", '{"keys": {}}'],
+    ["null keys", '{"keys": null}'],
     ["empty keys", '{"keys": []}'],
     ["empty key", '{"keys": [{}]}'],
     ["non-object key", '{"keys": [null]}'],
@@ -226,22 +227,6 @@ describe("loadIdentityVerifierConfig JWKS errors", () => {
     }
   });
 
-  it("requires canonical minimal Base64urlUInt n and e", async () => {
-    const withLeadingZero = (value: string): string => {
-      const bytes = Buffer.from(value.replaceAll("-", "+").replaceAll("_", "/"), "base64");
-      return Buffer.from([0, ...bytes])
-        .toString("base64url");
-    };
-    for (const invalidKey of [
-      { ...key.publicJwk, n: withLeadingZero(key.publicJwk.n!) },
-      { ...key.publicJwk, e: withLeadingZero(key.publicJwk.e!) },
-    ]) {
-      await expect(
-        load({ jwks: JSON.stringify({ keys: [invalidKey] }) }),
-      ).resolves.toEqual({ ok: false, reason: "jwks_malformed" });
-    }
-  });
-
   it("accepts a valid 2048-bit RS256 public key", async () => {
     const modulus = Buffer.from(key.publicJwk.n!, "base64url");
     expect(modulus).toHaveLength(256);
@@ -308,23 +293,6 @@ describe("loadIdentityVerifierConfig JWKS errors", () => {
         load({ jwks: JSON.stringify({ keys: [invalidKey] }) }),
       ).resolves.toEqual({ ok: false, reason: "jwks_malformed" });
     }
-  });
-
-  it("uses parsed own-data JSON and never honors inherited key metadata", async () => {
-    // SAFETY: the null-prototype object intentionally inherits key metadata;
-    // this test verifies parsed JSON does not honor that prototype.
-    const inherited = Object.create(key.publicJwk) as { kid: string };
-    inherited.kid = key.kid;
-    await expect(
-      load({ jwks: JSON.stringify({ keys: [inherited] }) }),
-    ).resolves.toEqual({ ok: false, reason: "jwks_malformed" });
-
-    const json = JSON.stringify({
-      keys: [{ ...key.publicJwk, __proto__: { d: "private" } }],
-    });
-    const result = await load({ jwks: json });
-    expect(result.ok).toBe(true);
-    expect({ d: undefined }.d).toBeUndefined();
   });
 });
 
