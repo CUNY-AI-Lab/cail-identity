@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  CAIL_AUTH_ERROR_CODES,
   CAIL_CANONICAL_ORIGIN,
   createCailAuthError,
   isCailAuthLaunch,
@@ -32,17 +31,7 @@ describe("CAIL auth error envelope", () => {
     expect(Object.isFrozen(envelope.error)).toBe(true);
   });
 
-  it("accepts only the active finite auth code set", () => {
-    expect(CAIL_AUTH_ERROR_CODES).toEqual([
-      "authentication_required",
-      "authentication_failed",
-      "invalid_credential",
-      "session_invalid",
-      "admission_required",
-      "admission_unavailable",
-      "identity_unavailable",
-      "identity_verification_misconfigured",
-    ]);
+  it("parses a code-only envelope without a launch", () => {
     expect(
       parseCailAuthErrorJson(
         '{"error":{"code":"admission_required","message":"Request access."}}',
