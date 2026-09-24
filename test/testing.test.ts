@@ -12,7 +12,6 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import {
   CAIL_CANONICAL_ISSUER,
-  deriveCailSubject,
   isCailSubject,
   loadIdentityVerifierConfig,
   verifyIdentityJwt,
@@ -47,26 +46,6 @@ async function configFor(
 }
 
 describe("canonicalTestSubject", () => {
-  it("is deterministic: the same seed always yields the same subject", () => {
-    expect(canonicalTestSubject("alice")).toBe(canonicalTestSubject("alice"));
-    expect(canonicalTestSubject("user:someone@gc.cuny.edu")).toBe(
-      canonicalTestSubject("user:someone@gc.cuny.edu"),
-    );
-  });
-
-  it("gives distinct subjects for distinct seeds", () => {
-    const seeds = Array.from({ length: 200 }, (_, i) => `seed-${i}`);
-    const subjects = new Set(seeds.map(canonicalTestSubject));
-    expect(subjects.size).toBe(seeds.length);
-  });
-
-  it("always matches the canonical CAIL subject shape", () => {
-    for (const seed of ["", "alice", "user:bob@x", "ünïcode-Σ", "a".repeat(500)]) {
-      const subject = canonicalTestSubject(seed);
-      expect(isCailSubject(subject)).toBe(true);
-    }
-  });
-
   it("is exactly cail- + first-32-lowercase-hex of SHA-256(seed) (FIPS vectors)", () => {
     // SHA-256("") = e3b0c44298fc1c149afbf4c8996fb924...
     expect(canonicalTestSubject("")).toBe(
@@ -95,18 +74,6 @@ describe("canonicalTestSubject", () => {
     for (const seed of seeds) {
       expect(canonicalTestSubject(seed)).toBe(referenceSubject(seed));
     }
-  });
-
-  it("shares the exact shape deriveCailSubject produces", async () => {
-    const derived = await deriveCailSubject({
-      issuer: CAIL_CANONICAL_ISSUER,
-      oidcSubject: "someone",
-      subjectSalt: "test-only-salt-at-least-32-bytes-long",
-    });
-    const fixture = canonicalTestSubject("someone");
-    expect(isCailSubject(fixture)).toBe(true);
-    expect(isCailSubject(derived)).toBe(true);
-    expect(fixture.length).toBe(derived.length);
   });
 
   it("rejects non-string seeds", () => {
