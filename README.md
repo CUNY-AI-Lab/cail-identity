@@ -12,32 +12,17 @@ The package has two deliberately separate jobs:
 
 Neither operation trusts request headers or user-supplied identity fields.
 
-## Installation (GitHub Packages)
+## Installation
 
-The package is published to GitHub Packages under the `@cuny-ai-lab` scope.
-Add the registry mapping to the consuming repository's `.npmrc` (resolution
-only — never commit a token):
+The package is published to the public npm registry as
+`@cuny-ai-lab/cail-identity`. Install it like any npm package; no registry
+mapping or token is needed:
 
 ```
-@cuny-ai-lab:registry=https://npm.pkg.github.com
+bun add @cuny-ai-lab/cail-identity@5.2.6
 ```
 
-Configure authentication outside the repository, for example in the user's
-`~/.npmrc`:
-
-```ini
-//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
-```
-
-These are registry configuration files that Bun reads; no npm CLI is required.
-Pin an exact published release, then run `bun install` with
-`NODE_AUTH_TOKEN` set to a
-[classic GitHub PAT](https://docs.github.com/en/packages/learn-github-packages/introduction-to-github-packages#authenticating-to-github-packages)
-that has `read:packages`. CI may supply the same environment variable from a
-secret. Maintainers keep the same registry and authentication configuration
-outside the repository, set `NPM_CONFIG_TOKEN` to a classic PAT with
-`write:packages`. Releases use the workflow described below. GitHub Actions
-uses its repository `GITHUB_TOKEN` with `packages: write`.
+Pin an exact published release. Releases use the workflow described below.
 
 ## Auth and SSO failure envelope
 
@@ -412,9 +397,11 @@ before the assertion. The vendored source and upstream commit are recorded in
 in the published package, so consumers install without a build step.
 Publishing a stable (non-prerelease) GitHub release whose tag matches `v` plus
 the package version runs verification once and publishes the same tested
-`.release/package.tgz` to GitHub Packages with the repository's workflow token.
-Bun skips lifecycle scripts when publishing an existing tarball; direct
-directory publication retains the `prepublishOnly` verification hook. Package
+`.release/package.tgz` to npm through trusted publishing: npm accepts the
+workflow's short-lived GitHub identity, so no npm token exists, and each release
+carries a provenance attestation. Publishing an existing tarball skips lifecycle
+scripts; direct directory publication retains the `prepublishOnly` verification
+hook. Package
 publication does not update a production deployment.
 
 ## License
