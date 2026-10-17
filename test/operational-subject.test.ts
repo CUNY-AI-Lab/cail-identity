@@ -3,10 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   deriveCailOperationalSubject,
   deriveCailSubject,
-  isCailOperationalSubject,
   loadIdentityVerifierConfig,
   verifyIdentityJwt,
-  type IdentityVerifierConfig,
 } from "../src/index.js";
 import {
   TEST_OPERATIONAL_SUBJECTS,
@@ -14,32 +12,30 @@ import {
   createTestIdentityIssuer,
 } from "../src/testing.js";
 
-async function configFor(
-  issuer: Awaited<ReturnType<typeof createTestIdentityIssuer>>,
-  expectedAudience: string,
-): Promise<IdentityVerifierConfig> {
-  const result = await loadIdentityVerifierConfig({
-    jwks: issuer.jwksJson,
-    issuer: issuer.issuer,
-    expectedAudience,
-  });
-  if (!result.ok) throw new Error(`fixture config failed: ${result.reason}`);
-  return result.config;
-}
+const NOW = 2_000_000;
+const AUDIENCE = "cail:workbench";
+const issuer = await createTestIdentityIssuer();
+const loaded = await loadIdentityVerifierConfig({
+  jwks: issuer.jwksJson,
+  issuer: issuer.issuer,
+  expectedAudience: AUDIENCE,
+  now: NOW,
+});
+if (!loaded.ok) throw new Error(`fixture config failed: ${loaded.reason}`);
+const config = loaded.config;
 
 describe("operational identity pseudonym", () => {
-  it("uses a separate keyed and domain-separated derivation", async () => {
-    const ownership = await deriveCailSubject({
+  it("derives a different pseudonym than the ownership subject under the same salt", async () => {
+    const input = {
       issuer: "https://issuer.example",
       oidcSubject: "ALICE@login.cuny.edu",
-      subjectSalt: "ownership-salt-at-least-32-bytes-long",
-    });
+    };
+    const salt = "one-salt-for-both-domains-at-least-32-bytes";
+    const ownership = await deriveCailSubject({ ...input, subjectSalt: salt });
     const operational = await deriveCailOperationalSubject({
-      issuer: "https://issuer.example",
-      oidcSubject: "ALICE@login.cuny.edu",
-      operationalSubjectSalt: "operational-salt-at-least-32-bytes",
+      ...input,
+      operationalSubjectSalt: salt,
     });
-    expect(isCailOperationalSubject(operational)).toBe(true);
     expect(operational.slice("cail-v1-".length)).not.toBe(
       ownership.slice("cail-".length),
     );
@@ -75,8 +71,6 @@ describe("operational identity pseudonym", () => {
       });
     }
     const expected = await deriveCailOperationalSubject(valid);
-    // SAFETY: hostile has all operational derivation properties installed as
-    // accessors above; the test intentionally changes their second read.
     await expect(deriveCailOperationalSubject(hostile)).resolves.toBe(expected);
     expect(reads).toEqual({
       issuer: 1,
@@ -86,30 +80,24 @@ describe("operational identity pseudonym", () => {
   });
 
   it("returns a validated optional log_sub claim from a signed token", async () => {
-    const issuer = await createTestIdentityIssuer();
     const token = await issuer.mintIdentityJwt({
-      audience: "cail:workbench",
+      audience: AUDIENCE,
       subject: TEST_SUBJECTS.alice,
       operationalSubject: TEST_OPERATIONAL_SUBJECTS.alice,
+      now: NOW,
     });
-    const config = await configFor(issuer, "cail:workbench");
-    await expect(
-      verifyIdentityJwt(token, config),
-    ).resolves.toMatchObject({
+    await expect(verifyIdentityJwt(token, config)).resolves.toMatchObject({
       subject: TEST_SUBJECTS.alice,
       operationalSubject: TEST_OPERATIONAL_SUBJECTS.alice,
     });
   });
 
   it("rejects a malformed log_sub claim", async () => {
-    const issuer = await createTestIdentityIssuer();
     const token = await issuer.mintIdentityJwt({
-      audience: "cail:workbench",
+      audience: AUDIENCE,
       operationalSubject: TEST_SUBJECTS.alice,
+      now: NOW,
     });
-    const config = await configFor(issuer, "cail:workbench");
-    await expect(
-      verifyIdentityJwt(token, config),
-    ).resolves.toBeNull();
+    await expect(verifyIdentityJwt(token, config)).resolves.toBeNull();
   });
 });

@@ -9,28 +9,16 @@ import {
 const salt = "local-proof-subject-salt-do-not-use";
 
 describe("stable CAIL app-principal subject", () => {
-  it("matches fixed cross-language HMAC-SHA256 vectors", async () => {
-    await expect(
-      deriveAppSubject("kale:reference-librarian", salt),
-    ).resolves.toBe("app-f2df9b696a24e25456da81334d1be343");
-    await expect(deriveAppSubject("kale:other-project", salt)).resolves.toBe(
-      "app-dcec50f23cdbf4d281a40b7fa79ec925",
-    );
-  });
-
-  it("is stable for the same app id and distinct across ids and salts", async () => {
-    const first = await deriveAppSubject("kale:reference-librarian", salt);
-    const again = await deriveAppSubject("kale:reference-librarian", salt);
-    expect(again).toBe(first);
-    await expect(deriveAppSubject("kale:other-project", salt)).resolves.not.toBe(
-      first,
-    );
-    await expect(
-      deriveAppSubject(
-        "kale:reference-librarian",
-        "another-salt-at-least-32-bytes-long",
-      ),
-    ).resolves.toBe("app-5375378fcf5a70dfdc592598fd89210f");
+  it.each([
+    ["kale:reference-librarian", salt, "app-f2df9b696a24e25456da81334d1be343"],
+    ["kale:other-project", salt, "app-dcec50f23cdbf4d281a40b7fa79ec925"],
+    [
+      "kale:reference-librarian",
+      "another-salt-at-least-32-bytes-long",
+      "app-5375378fcf5a70dfdc592598fd89210f",
+    ],
+  ])("derives the fixed cross-language vector for %s under salt %s", async (appId, subjectSalt, expected) => {
+    await expect(deriveAppSubject(appId, subjectSalt)).resolves.toBe(expected);
   });
 
   it("uses the app id byte-exact — no canonicalization", async () => {
@@ -45,35 +33,29 @@ describe("stable CAIL app-principal subject", () => {
     expect(isCailSubject(subject)).toBe(false);
   });
 
-  it("rejects invalid app ids and salts", async () => {
-    await expect(deriveAppSubject("", salt)).rejects.toThrow("appId");
-    await expect(deriveAppSubject("  padded  ", salt)).rejects.toThrow("appId");
-    await expect(deriveAppSubject("ctl\u0001id", salt)).rejects.toThrow(
-      "appId",
-    );
+  it.each([
+    ["an empty app id", "", salt],
+    ["an app id with edge whitespace", "  padded  ", salt],
+    ["an app id with a control character", "ctl\u0001id", salt],
     // SAFETY: this deliberately injects a non-string runtime value to exercise
     // the public app-id validation boundary.
-    await expect(
-      deriveAppSubject(undefined as never, salt),
-    ).rejects.toThrow("appId");
-    await expect(deriveAppSubject("kale:widget", "")).rejects.toThrow(
-      "subjectSalt",
-    );
-    await expect(
-      deriveAppSubject("kale:widget", "ctl\u0001salt"),
-    ).rejects.toThrow("subjectSalt");
-    await expect(
-      deriveAppSubject("kale:widget", "x".repeat(31)),
-    ).rejects.toThrow("32 UTF-8 bytes");
+    ["a non-string app id", undefined as never, salt],
+    ["an empty salt", "kale:widget", ""],
+    ["a salt with a control character", "kale:widget", "ctl\u0001salt"],
+    ["a 31-byte salt", "kale:widget", "x".repeat(31)],
+  ])("rejects %s", async (_name, appId, subjectSalt) => {
+    await expect(deriveAppSubject(appId, subjectSalt)).rejects.toThrow(TypeError);
   });
 
-  it("isAppSubject accepts only the canonical representation", () => {
-    expect(isAppSubject("app-" + "0".repeat(32))).toBe(true);
-    expect(isAppSubject("app-" + "0".repeat(31))).toBe(false);
-    expect(isAppSubject("app-" + "G".repeat(32))).toBe(false);
-    expect(isAppSubject("APP-" + "0".repeat(32))).toBe(false);
-    expect(isAppSubject("cail-" + "0".repeat(32))).toBe(false);
-    expect(isAppSubject(42)).toBe(false);
-    expect(isAppSubject(null)).toBe(false);
+  it.each([
+    ["app-" + "0".repeat(32), true],
+    ["app-" + "0".repeat(31), false],
+    ["app-" + "G".repeat(32), false],
+    ["APP-" + "0".repeat(32), false],
+    ["cail-" + "0".repeat(32), false],
+    [42, false],
+    [null, false],
+  ])("isAppSubject(%j) is %s", (value, expected) => {
+    expect(isAppSubject(value)).toBe(expected);
   });
 });

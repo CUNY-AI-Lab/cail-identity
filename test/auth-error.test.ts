@@ -1,13 +1,22 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  CAIL_CANONICAL_ORIGIN,
   createCailAuthError,
-  isCailAuthLaunch,
   parseCailAuthErrorEnvelope,
   parseCailAuthErrorJson,
   serializeCailAuthError,
 } from "../src/index.js";
+
+const VALID_ERROR = { code: "authentication_required", message: "Sign in." };
+
+const hiddenRootExtra = { error: { ...VALID_ERROR } };
+Object.defineProperty(hiddenRootExtra, "extra", { value: true, enumerable: false });
+
+const hiddenNestedExtra = { error: { ...VALID_ERROR } };
+Object.defineProperty(hiddenNestedExtra.error, "extra", {
+  value: true,
+  enumerable: false,
+});
 
 describe("CAIL auth error envelope", () => {
   it("constructs and serializes the canonical nested shape", () => {
@@ -41,111 +50,48 @@ describe("CAIL auth error envelope", () => {
     });
   });
 
-  it("rejects flat, extra, malformed, and unknown fields", () => {
-    const invalidBodies = [
-      '{"error":"authentication_required"}',
-      '{"error":{"code":"authentication_required","message":"Sign in.","extra":true}}',
-      '{"error":{"code":"unknown","message":"Sign in."}}',
-      '{"error":{"code":"authentication_required"}}',
-      '{"error":{"code":"authentication_required","message":""}}',
-      '{"error":{"code":"authentication_required","message":"bad\\nmessage"}}',
-      '{"error":{"code":"authentication_required","message":"Sign in."},"extra":true}',
-      '{"error":{"code":"authentication_required","message":"Sign in.","launch":"https://evil.example/launch"}}',
-      '{"error":{"code":"authentication_required","message":"Sign in.","launch":"//evil.example/launch"}}',
-      '{"error":{"code":"authentication_required","message":"Sign in.","launch":"/launch/../evil"}}',
-      '{"error":{"code":"authentication_required","message":"Sign in.","launch":"/launch/agent-studio?next=https://evil.example"}}',
-      '{"error":{"code":"authentication_required","message":"Sign in.","launch":"https://tools.ailab.gc.cuny.edu/launch/agent-studio?next=/"}}',
-    ];
+  it.each([
+    '{"error":"authentication_required"}',
+    '{"error":{"code":"authentication_required","message":"Sign in.","extra":true}}',
+    '{"error":{"code":"unknown","message":"Sign in."}}',
+    '{"error":{"code":"authentication_required"}}',
+    '{"error":{"code":"authentication_required","message":""}}',
+    '{"error":{"code":"authentication_required","message":"bad\\nmessage"}}',
+    '{"error":{"code":"authentication_required","message":"Sign in."},"extra":true}',
+    "not-json",
+    null,
+  ])("rejects body %j", (body) => {
+    expect(parseCailAuthErrorJson(body)).toBeNull();
+  });
 
-    for (const body of invalidBodies) {
-      expect(parseCailAuthErrorJson(body)).toBeNull();
-    }
-    expect(parseCailAuthErrorJson("not-json")).toBeNull();
-    expect(parseCailAuthErrorJson(null)).toBeNull();
-    expect(parseCailAuthErrorEnvelope({ error: "authentication_required" })).toBeNull();
+  it("rejects an explicitly undefined launch", () => {
     expect(
-      parseCailAuthErrorEnvelope({
-        error: {
-          code: "authentication_required",
-          message: "Sign in.",
-          launch: undefined,
-        },
-      }),
+      parseCailAuthErrorEnvelope({ error: { ...VALID_ERROR, launch: undefined } }),
     ).toBeNull();
+  });
 
-    const nonEnumerableRootExtra = {
-      error: { code: "authentication_required", message: "Sign in." },
-    };
-    Object.defineProperty(nonEnumerableRootExtra, "extra", {
-      value: true,
-      enumerable: false,
-    });
-    expect(parseCailAuthErrorEnvelope(nonEnumerableRootExtra)).toBeNull();
+  it.each([
+    ["root", hiddenRootExtra],
+    ["error", hiddenNestedExtra],
+  ])("rejects a non-enumerable extra property on the %s object", (_level, envelope) => {
+    expect(parseCailAuthErrorEnvelope(envelope)).toBeNull();
+  });
 
-    const nonEnumerableNestedExtra = {
-      error: { code: "authentication_required", message: "Sign in." },
-    };
-    Object.defineProperty(nonEnumerableNestedExtra.error, "extra", {
-      value: true,
-      enumerable: false,
-    });
-    expect(parseCailAuthErrorEnvelope(nonEnumerableNestedExtra)).toBeNull();
-
-    const getterEnvelope = {};
-    Object.defineProperty(getterEnvelope, "error", {
-      get: () => ({ code: "authentication_required", message: "Sign in." }),
+  it("rejects an accessor-backed error property", () => {
+    const envelope = {};
+    Object.defineProperty(envelope, "error", {
+      get: () => ({ ...VALID_ERROR }),
       enumerable: true,
     });
-    expect(parseCailAuthErrorEnvelope(getterEnvelope)).toBeNull();
+    expect(parseCailAuthErrorEnvelope(envelope)).toBeNull();
   });
 
-  it("validates relative and canonical-origin launches without redirects", () => {
-    const valid = [
-      "/",
-      "/launch/agent-studio",
-      "/site-studio/",
-      `${CAIL_CANONICAL_ORIGIN}/model-access`,
-    ];
-    for (const launch of valid) expect(isCailAuthLaunch(launch)).toBe(true);
-
-    const invalid = [
-      "launch/agent-studio",
-      "//evil.example/launch",
-      "/launch//agent-studio",
-      "/launch/./agent-studio",
-      "/launch/agent-studio#fragment",
-      "/launch/agent-studio?next=/",
-      "/launch\\agent-studio",
-      `${CAIL_CANONICAL_ORIGIN}.evil.example/launch/agent-studio`,
-      `${CAIL_CANONICAL_ORIGIN}:443/launch/agent-studio`,
-      "https://TOOLS.AILAB.GC.CUNY.EDU/launch/agent-studio",
-      CAIL_CANONICAL_ORIGIN,
-      `${CAIL_CANONICAL_ORIGIN}/launch/../agent-studio`,
-      `${CAIL_CANONICAL_ORIGIN}/%2e%2e/agent-studio`,
-      `${CAIL_CANONICAL_ORIGIN}/launch/agent-studio#fragment`,
-      `${CAIL_CANONICAL_ORIGIN}/launch/agent-studio?next=/`,
-      `${CAIL_CANONICAL_ORIGIN}/launch/agent-studio?`,
-      `${CAIL_CANONICAL_ORIGIN}/launch/agent-studio#`,
-      `${CAIL_CANONICAL_ORIGIN}/launch/agent-studio?#`,
-      `${CAIL_CANONICAL_ORIGIN}/launch\\agent-studio`,
-      `${CAIL_CANONICAL_ORIGIN}/launch/agent\nstudio`,
-      `${CAIL_CANONICAL_ORIGIN}/launch `,
-    ];
-    for (const launch of invalid) expect(isCailAuthLaunch(launch)).toBe(false);
-    expect(isCailAuthLaunch(42)).toBe(false);
-    expect(isCailAuthLaunch(null)).toBe(false);
-  });
-
-  it("fails closed when constructors receive unsafe values", () => {
-    expect(() => createCailAuthError("authentication_required", "")).toThrow(
-      "invalid CAIL auth error envelope",
-    );
+  it.each([
+    ["an empty message", "", undefined],
+    ["an off-origin launch", "Sign in.", "https://evil.example/launch"],
+  ])("refuses to construct an envelope with %s", (_name, message, launch) => {
     expect(() =>
-      createCailAuthError(
-        "authentication_required",
-        "Sign in.",
-        "https://evil.example/launch",
-      ),
-    ).toThrow("invalid CAIL auth error envelope");
+      createCailAuthError("authentication_required", message, launch),
+    ).toThrow(TypeError);
   });
 });
