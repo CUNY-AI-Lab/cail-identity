@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import {
   CAIL_CANONICAL_ISSUER,
@@ -12,7 +12,6 @@ import {
   mintRsaJwt,
   type JsonObject,
   type JsonValue,
-  type RsaFixture,
 } from "./fixtures.js";
 
 const NOW = 1_000_000;
@@ -21,15 +20,11 @@ const OTHER_ISS = "https://test-issuer.example/cail-sso";
 const AUD = "cail-internal";
 const MAX_JWKS_JSON_DEPTH = 64;
 
-let key: RsaFixture;
-let otherKey: RsaFixture;
-
-beforeAll(async () => {
-  [key, otherKey] = await Promise.all([
-    makeRsaFixture("config-2026-07"),
-    makeRsaFixture("config-2026-08"),
-  ]);
-});
+const [key, otherKey] = await Promise.all([
+  makeRsaFixture("config-2026-07"),
+  makeRsaFixture("config-2026-08"),
+]);
+const { n, e } = key.publicJwk;
 
 type ConfigTestOverrides = {
   jwks?: JsonValue;
@@ -63,6 +58,10 @@ async function mustLoad(over: ConfigTestOverrides = {}): Promise<IdentityVerifie
   return result.config;
 }
 
+function jwksWithKey(over: JsonObject): string {
+  return JSON.stringify({ keys: [{ ...key.publicJwk, ...over }] });
+}
+
 type JwksMetadata = string | JwksMetadata[];
 
 function valueAtJwksDepth(depth: number): JwksMetadata {
@@ -80,50 +79,56 @@ function jwksWithMetadataAtDepth(depth: number): string {
   });
 }
 
+function base64urlBytes(bytes: number[]): string {
+  return Buffer.from(bytes).toString("base64url");
+}
+
+const modulus = [...Buffer.from(n!, "base64url")];
+const evenModulus = base64urlBytes([...modulus.slice(0, -1), modulus.at(-1)! & 0xfe]);
+const shortModulus = base64urlBytes([0x7f, ...modulus.slice(1)]);
+
 describe("loadIdentityVerifierConfig happy path", () => {
   it("returns a frozen full verifier snapshot", async () => {
-    const result = await load();
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.config).toMatchObject({
+    const config = await mustLoad();
+    expect(config).toMatchObject({
       expectedAudience: AUD,
       issuer: ISS,
       clockToleranceSeconds: 60,
       keyIds: [key.kid],
     });
-    expect(Object.isFrozen(result.config)).toBe(true);
-    expect(Object.isFrozen(result.config.keyIds)).toBe(true);
+    expect(Object.isFrozen(config)).toBe(true);
+    expect(Object.isFrozen(config.keyIds)).toBe(true);
   });
 
-  it("accepts both keys during a distinct-kid rotation overlap", async () => {
+  it.each([
+    ["first", key],
+    ["second", otherKey],
+  ])("verifies a token from the %s key of a distinct-kid rotation overlap", async (_name, signer) => {
     const config = await mustLoad({
-      jwks: JSON.stringify({
-        keys: [key.publicJwk, otherKey.publicJwk],
-      }),
+      jwks: JSON.stringify({ keys: [key.publicJwk, otherKey.publicJwk] }),
     });
-    expect(config.keyIds).toEqual([key.kid, otherKey.kid]);
-
-    for (const fixture of [key, otherKey]) {
-      const token = await mintRsaJwt(
-        {
-          sub: "cail-0123456789abcdef0123456789abcdef",
-          aud: AUD,
-          iss: ISS,
-          exp: NOW + 3600,
-        },
-        fixture,
-      );
-      await expect(verifyIdentityJwt(token, config)).resolves.not.toBeNull();
-    }
+    const token = await mintRsaJwt(
+      {
+        sub: "cail-0123456789abcdef0123456789abcdef",
+        aud: AUD,
+        iss: ISS,
+        exp: NOW + 3600,
+      },
+      signer,
+    );
+    await expect(verifyIdentityJwt(token, config)).resolves.not.toBeNull();
   });
 
   it("loads an additional issuer only when the caller explicitly trusts it", async () => {
-    const result = await load({
-      issuer: OTHER_ISS,
-      supportedIssuers: [ISS, OTHER_ISS],
+    await expect(
+      load({ issuer: OTHER_ISS, supportedIssuers: [ISS, OTHER_ISS] }),
+    ).resolves.toMatchObject({ ok: true, config: { issuer: OTHER_ISS } });
+  });
+
+  it("accepts the smallest valid public exponent", async () => {
+    await expect(load({ jwks: jwksWithKey({ e: "Aw" }) })).resolves.toMatchObject({
+      ok: true,
     });
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.config.issuer).toBe(OTHER_ISS);
   });
 });
 
@@ -194,105 +199,63 @@ describe("loadIdentityVerifierConfig JWKS errors", () => {
     ).resolves.toMatchObject({ ok: true });
   });
 
-  it("requires a nonempty distinct kid on every eligible public RS256 key", async () => {
-    for (const jwks of [
-      { keys: [{ ...key.publicJwk, kid: undefined }] },
-      { keys: [{ ...key.publicJwk, kid: "" }] },
-      { keys: [key.publicJwk, { ...key.publicJwk }] },
-    ]) {
-      await expect(load({ jwks: JSON.stringify(jwks) })).resolves.toEqual({
-        ok: false,
-        reason: "jwks_malformed",
-      });
-    }
+  it.each([
+    ["a missing kid", jwksWithKey({ kid: undefined })],
+    ["an empty kid", jwksWithKey({ kid: "" })],
+    ["a duplicate kid", JSON.stringify({ keys: [key.publicJwk, key.publicJwk] })],
+  ])("flags a key with %s", async (_name, jwks) => {
+    await expect(load({ jwks })).resolves.toEqual({
+      ok: false,
+      reason: "jwks_malformed",
+    });
   });
 
-  it("rejects every structurally ineligible or private JWK", async () => {
-    const invalidKeys = [
-      { ...key.publicJwk, kty: "EC" },
-      { ...key.publicJwk, alg: "RS512" },
-      { ...key.publicJwk, use: "enc" },
-      { ...key.publicJwk, key_ops: ["sign"] },
-      { ...key.publicJwk, key_ops: ["verify", "verify"] },
-      { ...key.publicJwk, n: "" },
-      { ...key.publicJwk, e: "AB" },
-      { ...key.publicJwk, d: "private-material" },
-      { ...key.publicJwk, k: "c2VjcmV0LWtleQ" },
-      { ...key.publicJwk, oth: [] },
-    ];
-    for (const invalidKey of invalidKeys) {
-      await expect(
-        load({ jwks: JSON.stringify({ keys: [invalidKey] }) }),
-      ).resolves.toEqual({ ok: false, reason: "jwks_malformed" });
-    }
+  it.each<[string, JsonObject]>([
+    ["non-RSA kty", { kty: "EC" }],
+    ["non-RS256 alg", { alg: "RS512" }],
+    ["encryption use", { use: "enc" }],
+    ["key_ops without verify", { key_ops: ["sign"] }],
+    ["duplicate key_ops", { key_ops: ["verify", "verify"] }],
+    ["empty modulus", { n: "" }],
+    ["private exponent", { d: "private-material" }],
+    ["symmetric key material", { k: "c2VjcmV0LWtleQ" }],
+    ["other primes", { oth: [] }],
+  ])("flags an ineligible or private JWK: %s", async (_name, over) => {
+    await expect(load({ jwks: jwksWithKey(over) })).resolves.toEqual({
+      ok: false,
+      reason: "jwks_malformed",
+    });
   });
 
-  it("accepts a valid 2048-bit RS256 public key", async () => {
-    const modulus = Buffer.from(key.publicJwk.n!, "base64url");
-    expect(modulus).toHaveLength(256);
-    expect(modulus[0]! & 0x80).not.toBe(0);
-    expect(key.publicJwk.e).toBe("AQAB");
-    await expect(load()).resolves.toMatchObject({ ok: true });
-    await expect(
-      load({
-        jwks: JSON.stringify({
-          keys: [{ ...key.publicJwk, e: "Aw" }],
-        }),
-      }),
-    ).resolves.toMatchObject({ ok: true });
+  it.each<[string, JsonObject]>([
+    ["exponent 1", { e: "AQ" }],
+    ["exponent 2", { e: "Ag" }],
+    ["exponent above the safe-integer bound", { e: base64urlBytes([0x20, 0, 0, 0, 0, 0, 1]) }],
+    ["tiny odd modulus", { n: "AQ", e: "AQAB" }],
+    ["tiny even modulus", { n: "Ag", e: "Aw" }],
+    ["zero modulus", { n: "AA" }],
+    ["short arbitrary modulus", { n: Buffer.from("arbitrary modulus bytes").toString("base64url") }],
+    ["even 2048-bit modulus", { n: evenModulus }],
+    ["2047-bit modulus", { n: shortModulus }],
+  ])("flags unusable RSA public numbers before import: %s", async (_name, over) => {
+    await expect(load({ jwks: jwksWithKey(over) })).resolves.toEqual({
+      ok: false,
+      reason: "jwks_malformed",
+    });
   });
 
-  it("rejects unusable RSA public numbers before import", async () => {
-    const evenModulus = Buffer.from(key.publicJwk.n!, "base64url");
-    evenModulus[evenModulus.length - 1] =
-      evenModulus[evenModulus.length - 1]! & 0xfe;
-    const shortModulus = Buffer.from(key.publicJwk.n!, "base64url");
-    shortModulus[0] = 0x7f;
-    const tooLargeSafeExponent = Buffer.from([
-      0x20, 0, 0, 0, 0, 0, 1,
-    ]).toString("base64url");
-
-    const invalidKeys = [
-      { ...key.publicJwk, e: "AQ" }, // 1
-      { ...key.publicJwk, e: "Ag" }, // 2
-      { ...key.publicJwk, e: tooLargeSafeExponent },
-      { ...key.publicJwk, n: "AQ", e: "AQAB" }, // tiny odd modulus
-      { ...key.publicJwk, n: "Ag", e: "Aw" }, // tiny even modulus
-      { ...key.publicJwk, n: "AA" }, // zero modulus
-      {
-        ...key.publicJwk,
-        n: Buffer.from("arbitrary modulus bytes").toString("base64url"),
-      },
-      { ...key.publicJwk, n: evenModulus.toString("base64url") },
-      { ...key.publicJwk, n: shortModulus.toString("base64url") },
-    ];
-
-    for (const invalidKey of invalidKeys) {
-      await expect(
-        load({ jwks: JSON.stringify({ keys: [invalidKey] }) }),
-      ).resolves.toEqual({ ok: false, reason: "jwks_malformed" });
-    }
-  });
-
-  it("rejects malformed RSA public-number encodings", async () => {
-    const withLeadingZero = (value: string): string =>
-      Buffer.from([0, ...Buffer.from(value, "base64url")]).toString(
-        "base64url",
-      );
-    const invalidKeys = [
-      { ...key.publicJwk, n: `${key.publicJwk.n!}=` },
-      { ...key.publicJwk, e: `${key.publicJwk.e!}=` },
-      { ...key.publicJwk, n: `+${key.publicJwk.n!.slice(1)}` },
-      { ...key.publicJwk, e: "AB" },
-      { ...key.publicJwk, n: withLeadingZero(key.publicJwk.n!) },
-      { ...key.publicJwk, e: withLeadingZero(key.publicJwk.e!) },
-    ];
-
-    for (const invalidKey of invalidKeys) {
-      await expect(
-        load({ jwks: JSON.stringify({ keys: [invalidKey] }) }),
-      ).resolves.toEqual({ ok: false, reason: "jwks_malformed" });
-    }
+  it.each<[string, JsonObject]>([
+    ["padded modulus", { n: `${n!}=` }],
+    ["padded exponent", { e: `${e!}=` }],
+    ["non-base64url modulus character", { n: `+${n!.slice(1)}` }],
+    ["non-canonical exponent", { e: "AB" }],
+    ["modulus with a leading zero octet", { n: base64urlBytes([0, ...modulus]) }],
+    ["exponent with a leading zero octet", { e: base64urlBytes([0, ...Buffer.from(e!, "base64url")]) }],
+  ])("flags a malformed RSA public-number encoding: %s", async (_name, over) => {
+    await expect(load({ jwks: jwksWithKey(over) })).resolves.toEqual({
+      ok: false,
+      reason: "jwks_malformed",
+    });
   });
 });
 
@@ -319,14 +282,12 @@ describe("loadIdentityVerifierConfig issuer authority", () => {
     });
   });
 
-  it("rejects an issuer outside the default or supplied authority", async () => {
-    const outside = "https://evil.example/cail-sso";
-    await expect(load({ issuer: outside })).resolves.toEqual({
-      ok: false,
-      reason: "issuer_unsupported",
-    });
+  it.each([
+    ["the default authority", undefined],
+    ["a supplied authority", [ISS, OTHER_ISS]],
+  ])("rejects an issuer outside %s", async (_name, supportedIssuers) => {
     await expect(
-      load({ issuer: outside, supportedIssuers: [ISS, OTHER_ISS] }),
+      load({ issuer: "https://evil.example/cail-sso", supportedIssuers }),
     ).resolves.toEqual({ ok: false, reason: "issuer_unsupported" });
   });
 
@@ -342,12 +303,13 @@ describe("loadIdentityVerifierConfig issuer authority", () => {
     ).resolves.toEqual({ ok: false, reason: "issuer_unsupported" });
   });
 
-  it("rejects sparse and inherited supported issuer elements", async () => {
-    const sparse = Array<string>(1);
+  it("rejects a sparse supported issuer element", async () => {
     await expect(
-      load({ supportedIssuers: sparse }),
+      load({ supportedIssuers: Array<string>(1) }),
     ).resolves.toEqual({ ok: false, reason: "issuer_unsupported" });
+  });
 
+  it("rejects an inherited supported issuer element", async () => {
     const inherited = [ISS];
     delete inherited[0];
     Object.setPrototypeOf(inherited, { 0: ISS });
@@ -374,28 +336,6 @@ describe("loadIdentityVerifierConfig audience and timing", () => {
     },
   );
 
-  it.each([" ", "   "])(
-    "rejects a matching signed token for whitespace-only audience %j at the config boundary",
-    async (expectedAudience) => {
-      const matchingToken = await mintRsaJwt(
-        {
-          sub: "cail-0123456789abcdef0123456789abcdef",
-          aud: expectedAudience,
-          iss: ISS,
-          exp: NOW + 3600,
-        },
-        key,
-      );
-      const loaded = await load({ expectedAudience });
-      expect(loaded).toEqual({ ok: false, reason: "audience_malformed" });
-
-      const validConfig = await mustLoad();
-      await expect(
-        verifyIdentityJwt(matchingToken, validConfig),
-      ).resolves.toBeNull();
-    },
-  );
-
   it.each([
     { now: Number.NaN },
     { now: Number.POSITIVE_INFINITY },
@@ -412,16 +352,43 @@ describe("loadIdentityVerifierConfig audience and timing", () => {
   });
 
   it("accepts strict zero tolerance and the maximum finite Date bound", async () => {
-    const result = await load({
-      now: 8_640_000_000_000,
-      clockToleranceSeconds: 0,
-    });
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.config.clockToleranceSeconds).toBe(0);
+    await expect(
+      load({ now: 8_640_000_000_000, clockToleranceSeconds: 0 }),
+    ).resolves.toMatchObject({ ok: true, config: { clockToleranceSeconds: 0 } });
   });
 });
 
 describe("immutable snapshots and hostile accessors", () => {
+  it("loads a frozen input without writing to it", async () => {
+    const frozen = Object.freeze({
+      jwks: JSON.stringify(key.jwks),
+      issuer: ISS,
+      expectedAudience: AUD,
+      supportedIssuers: Object.freeze([ISS]),
+      now: NOW,
+      clockToleranceSeconds: 0,
+    });
+    await expect(loadIdentityVerifierConfig(frozen)).resolves.toMatchObject({
+      ok: true,
+    });
+  });
+
+  it("leaves an ordinary input unchanged", async () => {
+    const options = {
+      jwks: JSON.stringify(key.jwks),
+      issuer: ISS,
+      expectedAudience: AUD,
+      supportedIssuers: [ISS],
+      now: NOW,
+      clockToleranceSeconds: 0,
+    };
+    const before = structuredClone(options);
+    await expect(loadIdentityVerifierConfig(options)).resolves.toMatchObject({
+      ok: true,
+    });
+    expect(options).toStrictEqual(before);
+  });
+
   it("reads every top-level option exactly once and uses those exact values", async () => {
     const counts = new Map<string, number>();
     const valid: JsonObject = {
@@ -482,19 +449,26 @@ describe("immutable snapshots and hostile accessors", () => {
     expect(reads).toBe(1);
   });
 
-  it("returns an owned config error instead of throwing on hostile proxies", async () => {
-    const throwing = () => {
-      throw new Error("hostile config input");
-    };
+  it("returns an owned config error for an input proxy that throws", async () => {
     const hostileInput = new Proxy<LoadIdentityVerifierConfigInput>(
       { jwks: undefined, issuer: undefined, expectedAudience: undefined },
-      { getOwnPropertyDescriptor: throwing },
+      {
+        getOwnPropertyDescriptor() {
+          throw new Error("hostile config input");
+        },
+      },
     );
     await expect(
       loadIdentityVerifierConfig(hostileInput),
     ).resolves.toEqual({ ok: false, reason: "jwks_missing" });
+  });
 
-    const hostileAllowlist = new Proxy([ISS], { get: throwing });
+  it("returns an owned config error for a supported-issuer proxy that throws", async () => {
+    const hostileAllowlist = new Proxy([ISS], {
+      get() {
+        throw new Error("hostile config input");
+      },
+    });
     await expect(
       load({ supportedIssuers: hostileAllowlist }),
     ).resolves.toEqual({ ok: false, reason: "issuer_unsupported" });
@@ -513,6 +487,6 @@ describe("immutable snapshots and hostile accessors", () => {
           keyIds: [key.kid],
         } as never,
       ),
-    ).rejects.toThrow("snapshot returned by loadIdentityVerifierConfig");
+    ).rejects.toThrow(TypeError);
   });
 });

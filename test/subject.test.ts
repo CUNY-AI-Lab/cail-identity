@@ -7,11 +7,13 @@ import {
   deriveCailOperationalSubject,
   deriveCailSubject,
   isCailSubject,
+  type DeriveCailSubjectOptions,
 } from "../src/index.js";
 
+const SALT = "local-proof-subject-salt-do-not-use";
 const options = {
   issuer: "http://identity:8090/cuny",
-  subjectSalt: "local-proof-subject-salt-do-not-use",
+  subjectSalt: SALT,
 };
 
 interface SubjectVector {
@@ -40,55 +42,74 @@ const luaVectorRunner = fileURLToPath(
   new URL("./subject-derivation-v2.lua", import.meta.url),
 );
 
-describe("stable CAIL subject", () => {
-  it("matches the shared TypeScript and Lua v2 derivation vectors", async () => {
-    for (const vector of vectorContract.vectors) {
+describe("subject derivation v2 vectors", () => {
+  it.each(vectorContract.vectors)(
+    "derives the ownership subject for vector $name",
+    async (vector) => {
       await expect(
         deriveCailSubject({
           issuer: vector.issuer,
           oidcSubject: vector.oidcSubject,
           subjectSalt: vectorContract.salt,
         }),
-        vector.name,
       ).resolves.toBe(vector.ownershipSubject);
+    },
+  );
+
+  it.each(vectorContract.vectors)(
+    "derives the operational subject for vector $name",
+    async (vector) => {
       await expect(
         deriveCailOperationalSubject({
           issuer: vector.issuer,
           oidcSubject: vector.oidcSubject,
           operationalSubjectSalt: vectorContract.salt,
         }),
-        vector.name,
       ).resolves.toBe(vector.operationalSubject);
+    },
+  );
 
-      const [canonical, ownershipMaterial, operationalMaterial] = execFileSync(
+  it.each(vectorContract.vectors)(
+    "frames the Lua canonical subject and material for vector $name",
+    (vector) => {
+      const output = execFileSync(
         "luajit",
         [luaVectorRunner, vector.issuer, vector.oidcSubject],
         { encoding: "utf8" },
-      )
-        .trimEnd()
-        .split("\n");
-      expect(canonical, vector.name).toBe(vector.canonicalSubject);
-      expect(ownershipMaterial, vector.name).toBe(vector.ownershipMaterial);
-      expect(operationalMaterial, vector.name).toBe(
-        vector.operationalMaterial,
       );
-    }
-  });
+      expect(output.trimEnd().split("\n")).toEqual([
+        vector.canonicalSubject,
+        vector.ownershipMaterial,
+        vector.operationalMaterial,
+      ]);
+    },
+  );
+});
 
-  it("separates the two accepted pairs that collided under issuer|subject", async () => {
-    const [left, right] = vectorContract.vectors.filter((vector) =>
-      vector.name.startsWith("former-delimiter-collision"),
-    );
-    expect(left).toBeDefined();
-    expect(right).toBeDefined();
-    expect(`${left!.issuer}|${left!.canonicalSubject}`).toBe(
-      `${right!.issuer}|${right!.canonicalSubject}`,
-    );
-    expect(left!.ownershipMaterial).not.toBe(right!.ownershipMaterial);
-    expect(left!.operationalMaterial).not.toBe(right!.operationalMaterial);
-    expect(left!.ownershipSubject).not.toBe(right!.ownershipSubject);
-    expect(left!.operationalSubject).not.toBe(right!.operationalSubject);
-  });
+describe("stable CAIL subject", () => {
+  it.each([
+    [
+      "ownership",
+      (issuer: string, oidcSubject: string) =>
+        deriveCailSubject({ issuer, oidcSubject, subjectSalt: SALT }),
+    ],
+    [
+      "operational",
+      (issuer: string, oidcSubject: string) =>
+        deriveCailOperationalSubject({
+          issuer,
+          oidcSubject,
+          operationalSubjectSalt: SALT,
+        }),
+    ],
+  ])(
+    "separates the %s subjects of two inputs that collided under issuer|subject",
+    async (_kind, derive) => {
+      const left = await derive("https://issuer.example/a", "b|c");
+      const right = await derive("https://issuer.example/a|B", "c");
+      expect(left).not.toBe(right);
+    },
+  );
 
   it("namespaces a subject by issuer", async () => {
     const first = await deriveCailSubject({
@@ -103,72 +124,50 @@ describe("stable CAIL subject", () => {
     expect(second).not.toBe(first);
   });
 
-  it("rejects empty and control-bearing inputs", async () => {
+  it.each<[string, Partial<DeriveCailSubjectOptions>]>([
+    ["a subject that is empty after the realm is removed", { oidcSubject: " @login.cuny.edu " }],
+    ["a subject with an interior control character", { oidcSubject: "bo\u0001b" }],
+    ["an empty issuer", { issuer: "" }],
+    ["an empty salt", { subjectSalt: "" }],
+    ["a 31-byte salt", { subjectSalt: "x".repeat(31) }],
+  ])("rejects %s", async (_name, over) => {
     await expect(
-      deriveCailSubject({ ...options, oidcSubject: " @login.cuny.edu " }),
-    ).rejects.toThrow("must not be empty");
-    // A trailing newline is ASCII whitespace: trimmed like the gate, not rejected.
+      deriveCailSubject({ ...options, oidcSubject: "bob", ...over }),
+    ).rejects.toThrow(TypeError);
+  });
+
+  it("trims a trailing newline like the gate instead of rejecting it", async () => {
     await expect(
       deriveCailSubject({ ...options, oidcSubject: "bob\n" }),
-    ).resolves.toBe(
-      await deriveCailSubject({ ...options, oidcSubject: "BOB" }),
-    );
-    // An interior control character still fails closed.
-    await expect(
-      deriveCailSubject({ ...options, oidcSubject: "bo\u0001b" }),
-    ).rejects.toThrow("control characters");
-    await expect(
-      deriveCailSubject({ ...options, issuer: "", oidcSubject: "bob" }),
-    ).rejects.toThrow("issuer");
-    await expect(
-      deriveCailSubject({
-        ...options,
-        subjectSalt: "",
-        oidcSubject: "bob",
-      }),
-    ).rejects.toThrow("subjectSalt");
-    await expect(
-      deriveCailSubject({
-        ...options,
-        subjectSalt: "x".repeat(31),
-        oidcSubject: "bob",
-      }),
-    ).rejects.toThrow("32 UTF-8 bytes");
+    ).resolves.toBe(await deriveCailSubject({ ...options, oidcSubject: "BOB" }));
   });
 
-  it("normalizes ASCII-only and never collides distinct non-ASCII subjects", async () => {
-    // Canonicalization is ASCII-only, matching the gate's byte-wise LuaJIT
-    // implementation. A Unicode-aware toUpperCase would fold these into
-    // colliding subjects (ß→SS, ı→I) — merging distinct people. They must
-    // stay distinct and pass through un-uppercased.
-    // Non-ASCII whitespace (NBSP) is NOT trimmed — ASCII %s only, like the gate.
-    // Distinct derived subjects follow from distinct canonical forms.
-    const sharpS = await deriveCailSubject({ ...options, oidcSubject: "straße" });
-    const latin = await deriveCailSubject({ ...options, oidcSubject: "strasse" });
-    const a = await deriveCailSubject({ ...options, oidcSubject: "bıb" });
-    const b = await deriveCailSubject({ ...options, oidcSubject: "bib" });
-    const nbsp = await deriveCailSubject({ ...options, oidcSubject: "bob\u00a0" });
-    const plain = await deriveCailSubject({ ...options, oidcSubject: "bob" });
-    expect(sharpS).not.toBe(latin);
-    expect(a).not.toBe(b);
-    expect(nbsp).not.toBe(plain);
+  // Canonicalization is ASCII-only, matching the gate's byte-wise LuaJIT
+  // implementation. A Unicode-aware toUpperCase would fold ß→SS and ı→I, and
+  // a Unicode trim would drop NBSP, merging distinct people.
+  it.each([
+    ["straße", "strasse"],
+    ["bıb", "bib"],
+    ["bob ", "bob"],
+  ])("keeps %j distinct from %j", async (left, right) => {
+    const leftSubject = await deriveCailSubject({ ...options, oidcSubject: left });
+    const rightSubject = await deriveCailSubject({ ...options, oidcSubject: right });
+    expect(leftSubject).not.toBe(rightSubject);
   });
 
-  it("recognizes only the canonical public subject format", () => {
-    expect(isCailSubject("cail-acdbd45ac152e6d248f1123c831c02c6")).toBe(true);
-    expect(isCailSubject("cail-ACDBD45AC152E6D248F1123C831C02C6")).toBe(false);
-    expect(isCailSubject("bob@login.cuny.edu")).toBe(false);
+  it.each([
+    ["cail-acdbd45ac152e6d248f1123c831c02c6", true],
+    ["cail-ACDBD45AC152E6D248F1123C831C02C6", false],
+    ["bob@login.cuny.edu", false],
+  ])("isCailSubject(%j) is %s", (value, expected) => {
+    expect(isCailSubject(value)).toBe(expected);
   });
 
   it("snapshots hostile derivation accessors and uses the exact salt bytes validated", async () => {
     const reads = { issuer: 0, oidcSubject: 0, subjectSalt: 0 };
     // SAFETY: the null-prototype object is populated with the exact derivation
     // option accessors immediately below to exercise the snapshot boundary.
-    const hostile = Object.create(null) as {
-      issuer: string;
-      oidcSubject: string;
-      subjectSalt: string;
-    };
+    const hostile = Object.create(null) as DeriveCailSubjectOptions;
     const values = {
       issuer: options.issuer,
       oidcSubject: "bob@LOGIN.CUNY.EDU",
@@ -191,8 +190,6 @@ describe("stable CAIL subject", () => {
       });
     }
 
-    // SAFETY: hostile has all DeriveCailSubjectOptions properties installed as
-    // accessors above; the test intentionally changes their second read.
     await expect(deriveCailSubject(hostile)).resolves.toBe(
       "cail-07c3e42149a128923ef778dcb680b733",
     );

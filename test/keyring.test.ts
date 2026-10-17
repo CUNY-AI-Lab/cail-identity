@@ -5,52 +5,45 @@ import {
   readIdentityKeyring,
   verifyIdentityJwt,
   verifyKeyringGatewayJwt,
-} from "../src/index";
+  type IdentityVerifierConfig,
+} from "../src/index.js";
 import {
   TEST_SUBJECTS,
   createTestIdentityIssuer,
-} from "../src/testing";
+} from "../src/testing.js";
+import { flipLowBit } from "./fixtures.js";
 
+const NOW = 2_000_000;
 const APP_AUDIENCE = "cail:site-studio";
 const APP_JWT_HEADER = "x-cail-identity-jwt";
 const GATEWAY_JWT_HEADER = "x-cail-gateway-identity-jwt";
 
-async function keyringFixture() {
-  const issuer = await createTestIdentityIssuer();
-  const appJwt = await issuer.mintIdentityJwt({
-    audience: APP_AUDIENCE,
-    subject: TEST_SUBJECTS.alice,
+const issuer = await createTestIdentityIssuer();
+
+async function configFor(expectedAudience: string): Promise<IdentityVerifierConfig> {
+  const loaded = await loadIdentityVerifierConfig({
+    jwks: issuer.jwksJson,
+    issuer: issuer.issuer,
+    expectedAudience,
+    now: NOW,
   });
-  const gatewayJwt = await issuer.mintIdentityJwt({
-    audience: CAIL_GATEWAY_AUDIENCE,
-    subject: TEST_SUBJECTS.alice,
-  });
-  const [gatewayLoaded, appLoaded] = await Promise.all([
-    loadIdentityVerifierConfig({
-      jwks: issuer.jwksJson,
-      issuer: issuer.issuer,
-      expectedAudience: CAIL_GATEWAY_AUDIENCE,
-    }),
-    loadIdentityVerifierConfig({
-      jwks: issuer.jwksJson,
-      issuer: issuer.issuer,
-      expectedAudience: APP_AUDIENCE,
-    }),
-  ]);
-  if (!gatewayLoaded.ok) throw new Error(gatewayLoaded.reason);
-  if (!appLoaded.ok) throw new Error(appLoaded.reason);
-  return {
-    issuer,
-    appJwt,
-    gatewayJwt,
-    gatewayConfig: gatewayLoaded.config,
-    appConfig: appLoaded.config,
-  };
+  if (!loaded.ok) throw new Error(loaded.reason);
+  return loaded.config;
 }
 
+function mint(audience: string, subject: string): Promise<string> {
+  return issuer.mintIdentityJwt({ audience, subject, now: NOW });
+}
+
+const [appConfig, gatewayConfig, appJwt, gatewayJwt] = await Promise.all([
+  configFor(APP_AUDIENCE),
+  configFor(CAIL_GATEWAY_AUDIENCE),
+  mint(APP_AUDIENCE, TEST_SUBJECTS.alice),
+  mint(CAIL_GATEWAY_AUDIENCE, TEST_SUBJECTS.alice),
+]);
+
 describe("identity keyring transport", () => {
-  it("round-trips a two-leg keyring through headers", async () => {
-    const { appJwt, gatewayJwt } = await keyringFixture();
+  it("round-trips a two-leg keyring through headers", () => {
     const headers = new Headers({
       [APP_JWT_HEADER]: appJwt,
       [GATEWAY_JWT_HEADER]: gatewayJwt,
@@ -58,8 +51,7 @@ describe("identity keyring transport", () => {
     expect(readIdentityKeyring(headers)).toEqual({ appJwt, gatewayJwt });
   });
 
-  it("reads an app-only keyring when the gateway header is absent", async () => {
-    const { appJwt } = await keyringFixture();
+  it("reads an app-only keyring when the gateway header is absent", () => {
     const headers = new Headers({ [APP_JWT_HEADER]: appJwt });
     expect(readIdentityKeyring(headers)).toEqual({ appJwt });
   });
@@ -68,135 +60,89 @@ describe("identity keyring transport", () => {
     expect(readIdentityKeyring(new Headers())).toBeNull();
   });
 
-  it("fails the whole keyring closed on a malformed leg", async () => {
-    const { appJwt, gatewayJwt } = await keyringFixture();
-    for (const bad of ["", "not-a-jwt", "a.b", `${gatewayJwt},${gatewayJwt}`]) {
-      const badGateway = new Headers({
-        [APP_JWT_HEADER]: appJwt,
-        [GATEWAY_JWT_HEADER]: bad,
-      });
-      expect(readIdentityKeyring(badGateway)).toBeNull();
-      const badApp = new Headers({
-        [APP_JWT_HEADER]: bad,
-        [GATEWAY_JWT_HEADER]: gatewayJwt,
-      });
-      expect(readIdentityKeyring(badApp)).toBeNull();
-    }
-  });
-
-  it("rejects duplicate headers by construction", async () => {
-    const { appJwt, gatewayJwt } = await keyringFixture();
+  it("rejects duplicate headers by construction", () => {
     const headers = new Headers({ [APP_JWT_HEADER]: appJwt });
     headers.append(GATEWAY_JWT_HEADER, gatewayJwt);
     headers.append(GATEWAY_JWT_HEADER, gatewayJwt);
     expect(readIdentityKeyring(headers)).toBeNull();
   });
 
-  it("verifies and forwards matching Site/Agent-style app and Gateway legs", async () => {
-    const { appJwt, gatewayJwt, appConfig, gatewayConfig } =
-      await keyringFixture();
-    const appIdentity = await verifyIdentityJwt(appJwt, appConfig);
-    expect(appIdentity?.subject).toBe(TEST_SUBJECTS.alice);
-
+  it("verifies matching Site/Agent-style app and Gateway legs", async () => {
     const keyring = readIdentityKeyring(
       new Headers({
         [APP_JWT_HEADER]: appJwt,
         [GATEWAY_JWT_HEADER]: gatewayJwt,
       }),
-    );
-    expect(keyring).not.toBeNull();
-    if (keyring === null) throw new Error("keyring fixture failed");
-    const identity = await verifyKeyringGatewayJwt(
-      keyring,
-      gatewayConfig,
-      appIdentity!.subject,
-    );
-    expect(identity?.subject).toBe(TEST_SUBJECTS.alice);
-    expect(keyring.gatewayJwt).toBe(gatewayJwt);
+    )!;
+    const appIdentity = await verifyIdentityJwt(keyring.appJwt, appConfig);
+    await expect(
+      verifyKeyringGatewayJwt(keyring, gatewayConfig, appIdentity!.subject),
+    ).resolves.toMatchObject({ subject: TEST_SUBJECTS.alice });
   });
 
   it("returns null for an absent gateway leg", async () => {
-    const { appJwt, gatewayConfig } = await keyringFixture();
-    expect(
-      await verifyKeyringGatewayJwt({ appJwt }, gatewayConfig, TEST_SUBJECTS.alice),
-    ).toBeNull();
+    await expect(
+      verifyKeyringGatewayJwt({ appJwt }, gatewayConfig, TEST_SUBJECTS.alice),
+    ).resolves.toBeNull();
   });
 
   it("rejects a gateway leg belonging to a different person", async () => {
-    const { issuer, appJwt, gatewayConfig } = await keyringFixture();
-    const bobGateway = await issuer.mintIdentityJwt({
-      audience: CAIL_GATEWAY_AUDIENCE,
-      subject: TEST_SUBJECTS.bob,
-    });
-    expect(
-      await verifyKeyringGatewayJwt(
+    const bobGateway = await mint(CAIL_GATEWAY_AUDIENCE, TEST_SUBJECTS.bob);
+    await expect(
+      verifyKeyringGatewayJwt(
         { appJwt, gatewayJwt: bobGateway },
         gatewayConfig,
         TEST_SUBJECTS.alice,
       ),
-    ).toBeNull();
+    ).resolves.toBeNull();
   });
 
   it("rejects an app-audience token smuggled into the gateway leg", async () => {
-    const { issuer, appJwt, gatewayConfig } = await keyringFixture();
-    const wrongAudience = await issuer.mintIdentityJwt({
-      audience: APP_AUDIENCE,
-      subject: TEST_SUBJECTS.alice,
-    });
-    expect(
-      await verifyKeyringGatewayJwt(
-        { appJwt, gatewayJwt: wrongAudience },
+    await expect(
+      verifyKeyringGatewayJwt(
+        { appJwt, gatewayJwt: appJwt },
         gatewayConfig,
         TEST_SUBJECTS.alice,
       ),
-    ).toBeNull();
+    ).resolves.toBeNull();
   });
 
-  it("rejects a forged gateway leg", async () => {
-    const { appJwt, gatewayJwt, gatewayConfig } = await keyringFixture();
-    const forged = `${gatewayJwt.slice(0, -2)}${gatewayJwt.endsWith("aa") ? "bb" : "aa"}`;
-    expect(
-      await verifyKeyringGatewayJwt(
+  it("rejects a gateway leg with a tampered signature", async () => {
+    // A middle character carries only signature bits, so the spelling stays
+    // canonical and only the signature check can reject the token.
+    const forged = flipLowBit(gatewayJwt, gatewayJwt.length - 100);
+    await expect(
+      verifyKeyringGatewayJwt(
         { appJwt, gatewayJwt: forged },
         gatewayConfig,
         TEST_SUBJECTS.alice,
       ),
-    ).toBeNull();
+    ).resolves.toBeNull();
   });
 
   it("rejects an expired gateway leg", async () => {
-    const { issuer, appJwt, gatewayConfig } = await keyringFixture();
     const expired = await issuer.mintIdentityJwt({
       audience: CAIL_GATEWAY_AUDIENCE,
       subject: TEST_SUBJECTS.alice,
-      now: Math.floor(Date.now() / 1_000) - 3_600,
+      now: NOW - 3_600,
       expiresInSeconds: 1,
     });
-    expect(
-      await verifyKeyringGatewayJwt(
+    await expect(
+      verifyKeyringGatewayJwt(
         { appJwt, gatewayJwt: expired },
         gatewayConfig,
         TEST_SUBJECTS.alice,
       ),
-    ).toBeNull();
+    ).resolves.toBeNull();
   });
 
-  it("throws on a non-gateway verifier config or bad expected subject", async () => {
-    const { issuer, appJwt, gatewayJwt } = await keyringFixture();
-    const appConfig = await loadIdentityVerifierConfig({
-      jwks: issuer.jwksJson,
-      issuer: issuer.issuer,
-      expectedAudience: APP_AUDIENCE,
-    });
-    if (!appConfig.ok) throw new Error(appConfig.reason);
+  it("throws on a verifier config for a non-gateway audience", async () => {
     await expect(
-      verifyKeyringGatewayJwt(
-        { appJwt, gatewayJwt },
-        appConfig.config,
-        TEST_SUBJECTS.alice,
-      ),
+      verifyKeyringGatewayJwt({ appJwt, gatewayJwt }, appConfig, TEST_SUBJECTS.alice),
     ).rejects.toThrow(TypeError);
-    const { gatewayConfig } = await keyringFixture();
+  });
+
+  it("throws on a non-canonical expected subject", async () => {
     await expect(
       verifyKeyringGatewayJwt(
         { appJwt, gatewayJwt },

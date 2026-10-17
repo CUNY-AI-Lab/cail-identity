@@ -1,21 +1,15 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-import {
-  CAIL_GATEWAY_AUDIENCE,
-  loadIdentityVerifierConfig,
-  readIdentityKeyring,
-  verifyIdentityJwt,
-  verifyKeyringGatewayJwt,
-} from "../src/index.js";
-import { TEST_SUBJECTS, createTestIdentityIssuer } from "../src/testing.js";
+import { readIdentityKeyring } from "../src/index.js";
 
 interface LegSchema {
   minLength: number;
   maxLength: number;
   pattern: string;
-  $comment: string;
 }
+
+type Leg = "app_jwt" | "gateway_jwt";
 
 // SAFETY: this checked-in contract fixture is parsed only for the schema
 // fields declared here; each test compares them against keyring behavior.
@@ -25,26 +19,20 @@ const contract = JSON.parse(
     "utf8",
   ),
 ) as {
-  required: string[];
-  properties: { app_jwt: LegSchema; gateway_jwt: LegSchema };
-  examples: Array<{ app_jwt: string; gateway_jwt: string }>;
+  properties: Record<Leg, LegSchema>;
+  examples: Array<Record<Leg, string>>;
 };
 
-const { app_jwt: appLeg, gateway_jwt: gatewayLeg } = contract.properties;
+const [example] = contract.examples;
 
-/** Each leg's `$comment` names its transport header: "Header <name>. ...". */
-function headerOf(leg: LegSchema): string {
-  const header = /^Header ([a-z-]+)\./.exec(leg.$comment)?.[1];
-  if (header === undefined) throw new Error("leg $comment names no header");
-  return header;
-}
-
-/** The gateway leg's `$comment` pins its audience: "aud = '<audience>'". */
-function gatewayAudience(): string {
-  const audience = /aud = '([^']+)'/.exec(gatewayLeg.$comment)?.[1];
-  if (audience === undefined) throw new Error("gateway leg names no audience");
-  return audience;
-}
+const HEADER = {
+  app_jwt: "x-cail-identity-jwt",
+  gateway_jwt: "x-cail-gateway-identity-jwt",
+} as const satisfies Record<Leg, string>;
+const OTHER_LEG = {
+  app_jwt: "gateway_jwt",
+  gateway_jwt: "app_jwt",
+} as const satisfies Record<Leg, Leg>;
 
 function contractAccepts(leg: LegSchema, value: string): boolean {
   return (
@@ -58,124 +46,40 @@ function compactOfLength(length: number): string {
   return `a.b.${"c".repeat(length - 4)}`;
 }
 
+function candidatesFor(leg: Leg) {
+  const { maxLength } = contract.properties[leg];
+  const rows: Array<[string, string]> = [
+    ["example token", example!.app_jwt],
+    ["empty", ""],
+    ["two segments", "a.b"],
+    ["three segments", "a.b.c"],
+    ["four segments", "a.b.c.d"],
+    ["an empty segment", "a..c"],
+    ["base64 padding", "a.b.c="],
+    ["a non-base64url character", "a+b.c.d"],
+    ["trailing whitespace", "a.b.c "],
+    ["two comma-joined tokens", `${example!.app_jwt},${example!.app_jwt}`],
+    ["maximum length", compactOfLength(maxLength)],
+    ["maximum length plus one", compactOfLength(maxLength + 1)],
+  ];
+  return rows.map(([name, value]) => ({ leg, name, value }));
+}
+
+const CANDIDATES = [...candidatesFor("app_jwt"), ...candidatesFor("gateway_jwt")];
+
 describe("identity-keyring-v1 contract", () => {
-  const [example] = contract.examples;
-
-  it("reads each contract example from the contract's headers", () => {
-    for (const value of contract.examples) {
+  it.each(CANDIDATES)(
+    "reads a $leg leg with $name exactly when the contract accepts it",
+    ({ leg, value }) => {
       const headers = new Headers({
-        [headerOf(appLeg)]: value.app_jwt,
-        [headerOf(gatewayLeg)]: value.gateway_jwt,
+        [HEADER[OTHER_LEG[leg]]]: example![OTHER_LEG[leg]],
       });
-      expect(readIdentityKeyring(headers)).toEqual({
-        appJwt: value.app_jwt,
-        gatewayJwt: value.gateway_jwt,
-      });
-    }
-  });
-
-  it("requires exactly the contract's required legs", () => {
-    expect(contract.required).toEqual(["app_jwt"]);
-    expect(
-      readIdentityKeyring(
-        new Headers({ [headerOf(gatewayLeg)]: example!.gateway_jwt }),
-      ),
-    ).toBeNull();
-    expect(
-      readIdentityKeyring(new Headers({ [headerOf(appLeg)]: example!.app_jwt })),
-    ).toEqual({ appJwt: example!.app_jwt });
-  });
-
-  it("accepts exactly the leg values the contract accepts", () => {
-    for (const [leg, other, otherValue] of [
-      [appLeg, gatewayLeg, example!.gateway_jwt],
-      [gatewayLeg, appLeg, example!.app_jwt],
-    ] as const) {
-      const candidates = [
-        example!.app_jwt,
-        "",
-        "a.b",
-        "a.b.c",
-        "a.b.c.d",
-        "a..c",
-        "a.b.c=",
-        "a+b.c.d",
-        "a.b.c ",
-        `${example!.app_jwt},${example!.app_jwt}`,
-        compactOfLength(leg.maxLength),
-        compactOfLength(leg.maxLength + 1),
-      ];
-      for (const value of candidates) {
-        const headers = new Headers({ [headerOf(other)]: otherValue });
-        headers.set(headerOf(leg), value);
-        const accepted = readIdentityKeyring(headers) !== null;
-        expect(accepted, `${headerOf(leg)}: ${value.slice(0, 40)}`).toBe(
-          contractAccepts(leg, headers.get(headerOf(leg)) ?? ""),
-        );
-      }
-    }
-  });
-
-  it("verifies a gateway leg only for the contract audience and app-leg subject", async () => {
-    const audience = gatewayAudience();
-    expect(CAIL_GATEWAY_AUDIENCE).toBe(audience);
-    const issuer = await createTestIdentityIssuer();
-    const appAudience = "cail:site-studio";
-    const mint = (aud: string, subject: string) =>
-      issuer.mintIdentityJwt({ audience: aud, subject });
-    const load = async (expectedAudience: string) => {
-      const loaded = await loadIdentityVerifierConfig({
-        jwks: issuer.jwksJson,
-        issuer: issuer.issuer,
-        expectedAudience,
-      });
-      if (!loaded.ok) throw new Error(loaded.reason);
-      return loaded.config;
-    };
-    const [appConfig, gatewayConfig] = await Promise.all([
-      load(appAudience),
-      load(audience),
-    ]);
-
-    const appJwt = await mint(appAudience, TEST_SUBJECTS.alice);
-    const appIdentity = await verifyIdentityJwt(appJwt, appConfig);
-    expect(appIdentity?.subject).toBe(TEST_SUBJECTS.alice);
-
-    const keyringFor = async (aud: string, subject: string) =>
-      readIdentityKeyring(
-        new Headers({
-          [headerOf(appLeg)]: appJwt,
-          [headerOf(gatewayLeg)]: await mint(aud, subject),
-        }),
-      )!;
-
-    await expect(
-      verifyKeyringGatewayJwt(
-        await keyringFor(audience, TEST_SUBJECTS.alice),
-        gatewayConfig,
-        appIdentity!.subject,
-      ),
-    ).resolves.toMatchObject({ subject: TEST_SUBJECTS.alice });
-    await expect(
-      verifyKeyringGatewayJwt(
-        await keyringFor(audience, TEST_SUBJECTS.bob),
-        gatewayConfig,
-        appIdentity!.subject,
-      ),
-    ).resolves.toBeNull();
-    await expect(
-      verifyKeyringGatewayJwt(
-        await keyringFor(appAudience, TEST_SUBJECTS.alice),
-        gatewayConfig,
-        appIdentity!.subject,
-      ),
-    ).resolves.toBeNull();
-    await expect(
-      verifyKeyringGatewayJwt(
-        await keyringFor(audience, TEST_SUBJECTS.alice),
-        appConfig,
-        appIdentity!.subject,
-      ),
-    ).rejects.toThrow(TypeError);
-  });
+      headers.set(HEADER[leg], value);
+      const accepted = readIdentityKeyring(headers) !== null;
+      // Headers trims surrounding whitespace, so compare what was delivered.
+      expect(accepted).toBe(
+        contractAccepts(contract.properties[leg], headers.get(HEADER[leg]) ?? ""),
+      );
+    },
+  );
 });

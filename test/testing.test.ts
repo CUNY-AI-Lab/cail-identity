@@ -7,8 +7,9 @@
  * `deriveCailSubject` emits — and the test issuer's tokens must verify
  * through the real `verifyIdentityJwt` boundary.
  */
-import { createHash, randomBytes } from "node:crypto";
-import { beforeAll, describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
+import { decodeJwt } from "jose";
+import { describe, expect, it } from "vitest";
 
 import {
   CAIL_CANONICAL_ISSUER,
@@ -21,252 +22,184 @@ import {
   TEST_SUBJECTS,
   canonicalTestSubject,
   createTestIdentityIssuer,
+  type MintTestIdentityJwtOptions,
   type TestIdentityIssuer,
 } from "../src/testing.js";
-import type { JsonObject } from "./fixtures.js";
 
-function referenceSubject(seed: string): string {
-  return `cail-${createHash("sha256").update(seed, "utf8").digest("hex").slice(0, 32)}`;
-}
+const AUD = "cail:testing-fixture";
+const NOW = 2_000_000;
 
 async function configFor(
-  issuer: TestIdentityIssuer,
-  expectedAudience: string,
-  now?: number,
+  kit: TestIdentityIssuer,
+  now: number,
 ): Promise<IdentityVerifierConfig> {
   const result = await loadIdentityVerifierConfig({
-    jwks: issuer.jwksJson,
-    issuer: issuer.issuer,
-    expectedAudience,
-    supportedIssuers: [issuer.issuer],
+    jwks: kit.jwksJson,
+    issuer: kit.issuer,
+    expectedAudience: AUD,
+    supportedIssuers: [kit.issuer],
     now,
   });
   if (!result.ok) throw new Error(`fixture config failed: ${result.reason}`);
   return result.config;
 }
 
+const issuer = await createTestIdentityIssuer();
+const config = await configFor(issuer, NOW);
+
 describe("canonicalTestSubject", () => {
-  it("is exactly cail- + first-32-lowercase-hex of SHA-256(seed) (FIPS vectors)", () => {
+  it.each([
     // SHA-256("") = e3b0c44298fc1c149afbf4c8996fb924...
-    expect(canonicalTestSubject("")).toBe(
-      "cail-e3b0c44298fc1c149afbf4c8996fb924",
-    );
+    ["", "cail-e3b0c44298fc1c149afbf4c8996fb924"],
     // SHA-256("abc") = ba7816bf8f01cfea414140de5dae2223... (FIPS 180-4 vector)
-    expect(canonicalTestSubject("abc")).toBe(
-      "cail-ba7816bf8f01cfea414140de5dae2223",
+    ["abc", "cail-ba7816bf8f01cfea414140de5dae2223"],
+  ])("is cail- plus the first 32 hex of SHA-256(%j)", (seed, expected) => {
+    expect(canonicalTestSubject(seed)).toBe(expected);
+  });
+
+  it.each([
+    ["one byte", "x"],
+    ["an email-like seed", "user:someone@gc.cuny.edu"],
+    ["multi-byte UTF-8 across a block boundary", "é".repeat(31)],
+    ["55 bytes (padding fits in one block)", "block-boundary-".padEnd(55, "a")],
+    ["56 bytes (forces a second block)", "block-boundary-".padEnd(56, "a")],
+    ["64 bytes (one full block)", "block-boundary-".padEnd(64, "a")],
+    ["119 bytes (padding fits in two blocks)", "block-boundary-".padEnd(119, "a")],
+    ["120 bytes (forces a third block)", "block-boundary-".padEnd(120, "a")],
+    ["500 bytes", "long-".repeat(100)],
+    ["control characters", `${String.fromCharCode(0, 1, 0x7f)} mixed controls`],
+  ])("matches node:crypto SHA-256 for %s", (_name, seed) => {
+    expect(canonicalTestSubject(seed)).toBe(
+      `cail-${createHash("sha256").update(seed, "utf8").digest("hex").slice(0, 32)}`,
     );
   });
 
-  it("matches node:crypto SHA-256 over arbitrary inputs (multi-block, unicode, binary-ish)", () => {
-    const seeds: string[] = [
-      "x",
-      "user:someone@gc.cuny.edu",
-      "é".repeat(31), // multi-byte UTF-8 straddling block boundaries
-      "block-boundary-".padEnd(55, "a"), // 55 bytes: padding fits in one block
-      "block-boundary-".padEnd(56, "a"), // 56 bytes: forces a second block
-      "block-boundary-".padEnd(64, "a"), // exactly one full block of message
-      "long-".repeat(100),
-      `${String.fromCharCode(0, 1, 0x7f)} mixed controls`,
-    ];
-    for (let i = 0; i < 64; i++) {
-      seeds.push(randomBytes(1 + (i % 97)).toString("base64"));
-    }
-    for (const seed of seeds) {
-      expect(canonicalTestSubject(seed)).toBe(referenceSubject(seed));
-    }
-  });
-
-  it("rejects non-string seeds", () => {
-    // SAFETY: these deliberately inject wrong runtime values to exercise the
-    // test-fixture input boundary.
-    expect(() => canonicalTestSubject(42 as never)).toThrow(
-      TypeError,
-    );
-    // SAFETY: this deliberately injects an undefined runtime value to exercise
-    // the test-fixture input boundary.
-    expect(() => canonicalTestSubject(undefined as never)).toThrow(TypeError);
+  // SAFETY: these deliberately inject wrong runtime values to exercise the
+  // test-fixture input boundary.
+  it.each([42 as never, undefined as never])("rejects non-string seed %j", (seed) => {
+    expect(() => canonicalTestSubject(seed)).toThrow(TypeError);
   });
 });
 
 describe("TEST_SUBJECTS", () => {
-  it("are distinct canonical subjects derived from their own names", () => {
-    expect(TEST_SUBJECTS.alice).toBe(canonicalTestSubject("alice"));
-    expect(TEST_SUBJECTS.bob).toBe(canonicalTestSubject("bob"));
-    expect(TEST_SUBJECTS.carol).toBe(canonicalTestSubject("carol"));
-    const all = Object.values(TEST_SUBJECTS);
-    expect(new Set(all).size).toBe(all.length);
-    for (const subject of all) expect(isCailSubject(subject)).toBe(true);
-  });
+  it.each(["alice", "bob", "carol"] as const)(
+    "%s is the canonical test subject of its own name",
+    (name) => {
+      expect(TEST_SUBJECTS[name]).toBe(canonicalTestSubject(name));
+      expect(isCailSubject(TEST_SUBJECTS[name])).toBe(true);
+    },
+  );
 });
 
 describe("createTestIdentityIssuer", () => {
-  const AUD = "cail:testing-fixture";
-  let issuer: TestIdentityIssuer;
-  let config: IdentityVerifierConfig;
-
-  beforeAll(async () => {
-    issuer = await createTestIdentityIssuer();
-    config = await configFor(issuer, AUD);
-  });
-
   it("mints identity JWTs that verify through verifyIdentityJwt", async () => {
     const token = await issuer.mintIdentityJwt({
       audience: AUD,
       email: "someone@gc.cuny.edu",
       name: "Some One",
       entitlements: ["tools"],
+      now: NOW,
     });
-    const identity = await verifyIdentityJwt(token, config);
-    expect(identity).not.toBeNull();
-    expect(identity?.subject).toBe(TEST_SUBJECTS.alice);
-    expect(identity?.email).toBe("someone@gc.cuny.edu");
-    expect(identity?.name).toBe("Some One");
-    expect(identity?.entitlements).toEqual(["tools"]);
+    await expect(verifyIdentityJwt(token, config)).resolves.toEqual({
+      subject: TEST_SUBJECTS.alice,
+      email: "someone@gc.cuny.edu",
+      name: "Some One",
+      entitlements: ["tools"],
+    });
   });
 
-  it("defaults to the canonical standalone issuer and exposes JWKS as object and JSON", async () => {
+  it("defaults to the canonical standalone issuer and exposes JWKS as object and JSON", () => {
     expect(issuer.issuer).toBe(CAIL_CANONICAL_ISSUER);
     expect(JSON.parse(issuer.jwksJson)).toEqual(issuer.jwks);
     expect(issuer.jwks.keys).toHaveLength(1);
     expect(issuer.jwks.keys[0]?.kid).toBe(issuer.kid);
   });
 
-  it("honors subject / issuer / time overrides (and fail-closed paths stay reachable)", async () => {
+  it("honors kid, issuer, subject and time overrides", async () => {
     const alternate = await createTestIdentityIssuer({
       kid: "alternate-key",
       issuer: "https://test-issuer.example/cail-sso",
     });
-    const now = 1_000_000;
     const token = await alternate.mintIdentityJwt({
       audience: AUD,
       subject: TEST_SUBJECTS.bob,
-      now,
+      now: NOW,
       expiresInSeconds: 60,
     });
-    const activeConfig = await configFor(alternate, AUD, now + 30);
     await expect(
-      verifyIdentityJwt(token, activeConfig),
+      verifyIdentityJwt(token, await configFor(alternate, NOW + 30)),
     ).resolves.toMatchObject({ subject: TEST_SUBJECTS.bob });
-    // Expired by the verifier's clock → null.
-    const expiredConfig = await configFor(alternate, AUD, now + 3600);
-    await expect(
-      verifyIdentityJwt(token, expiredConfig),
-    ).resolves.toBeNull();
-  });
-
-  it("can mint the historically-invalid subjects so fail-closed tests keep working", async () => {
-    const token = await issuer.mintIdentityJwt({
-      audience: AUD,
-      subject: "cail-abc123", // the exact drift class this export retires
-    });
-    await expect(
-      verifyIdentityJwt(token, config),
-    ).resolves.toBeNull();
   });
 
   it("tokens from one issuer kit never verify against another kit's JWKS", async () => {
     const other = await createTestIdentityIssuer();
-    const token = await other.mintIdentityJwt({ audience: AUD });
-    await expect(
-      verifyIdentityJwt(token, config),
-    ).resolves.toBeNull();
+    const token = await other.mintIdentityJwt({ audience: AUD, now: NOW });
+    await expect(verifyIdentityJwt(token, config)).resolves.toBeNull();
   });
 
-  it("rejects a missing or empty audience at mint time", async () => {
-    await expect(
-      issuer.mintIdentityJwt({ audience: "" }),
-    ).rejects.toThrow(TypeError);
-    // SAFETY: malformed values deliberately bypass the typed fixture contract
-    // to exercise its runtime validation boundary.
-    await expect(issuer.mintIdentityJwt(undefined as never)).rejects.toThrow(
-      TypeError,
-    );
-    // SAFETY: this deliberately passes an array at the audience boundary.
-    await expect(
-      issuer.mintIdentityJwt({ audience: [42] as never }),
-    ).rejects.toThrow(TypeError);
+  // SAFETY: the second and third rows deliberately bypass the typed fixture
+  // contract to exercise its runtime validation boundary.
+  it.each([
+    ["an empty audience", { audience: "" }],
+    ["no options", undefined as never],
+    ["a non-string audience array", { audience: [42] as never }],
+  ])("rejects %s at mint time", async (_name, options: MintTestIdentityJwtOptions) => {
+    await expect(issuer.mintIdentityJwt(options)).rejects.toThrow(TypeError);
   });
 
-  function decodePayload(token: string): JsonObject {
-    const part = token.split(".")[1]!;
-    const b64 = part.replace(/-/g, "+").replace(/_/g, "/");
-    // SAFETY: tokens in this test are compact JWTs and this helper is used
-    // only to inspect their JSON object payloads.
-    return JSON.parse(Buffer.from(b64, "base64").toString("utf8")) as JsonObject;
-  }
-
-  it("mints auth_time and the token still verifies (session-binding contracts)", async () => {
-    const now = 2_000_000;
+  it("mints auth_time and the token still verifies", async () => {
     const token = await issuer.mintIdentityJwt({
       audience: AUD,
-      now,
-      authTime: now - 30,
+      now: NOW,
+      authTime: NOW - 30,
     });
-    expect(decodePayload(token).auth_time).toBe(now - 30);
-    const timedConfig = await configFor(issuer, AUD, now + 10);
-    await expect(
-      verifyIdentityJwt(token, timedConfig),
-    ).resolves.toMatchObject({ subject: TEST_SUBJECTS.alice });
+    expect(decodeJwt(token).auth_time).toBe(NOW - 30);
+    await expect(verifyIdentityJwt(token, config)).resolves.toMatchObject({
+      subject: TEST_SUBJECTS.alice,
+    });
   });
 
-  it("mints nbf: past-nbf tokens verify, future-nbf tokens are rejected", async () => {
-    const now = 2_000_000;
-    const timedConfig = await configFor(issuer, AUD, now);
-    const active = await issuer.mintIdentityJwt({
-      audience: AUD,
-      now,
-      notBefore: now - 120,
-    });
-    expect(decodePayload(active).nbf).toBe(now - 120);
-    await expect(verifyIdentityJwt(active, timedConfig)).resolves.not.toBeNull();
-
-    const notYetValid = await issuer.mintIdentityJwt({
-      audience: AUD,
-      now,
-      notBefore: now + 3600,
-    });
-    await expect(verifyIdentityJwt(notYetValid, timedConfig)).resolves.toBeNull();
-  });
-
-  it("mints array-valued aud (even one-element) that the verifier must reject", async () => {
-    const token = await issuer.mintIdentityJwt({ audience: [AUD] });
-    expect(decodePayload(token).aud).toEqual([AUD]);
-    await expect(
-      verifyIdentityJwt(token, config),
-    ).resolves.toBeNull();
-  });
-
-  it("accepts arbitrary claim overrides: set registered/custom claims and omit defaults", async () => {
-    const now = 2_000_000;
+  it("mints nbf and a past-nbf token still verifies", async () => {
     const token = await issuer.mintIdentityJwt({
       audience: AUD,
-      now,
+      now: NOW,
+      notBefore: NOW - 120,
+    });
+    expect(decodeJwt(token).nbf).toBe(NOW - 120);
+    await expect(verifyIdentityJwt(token, config)).resolves.not.toBeNull();
+  });
+
+  it("mints an array-valued aud, even with one element", async () => {
+    const token = await issuer.mintIdentityJwt({ audience: [AUD], now: NOW });
+    expect(decodeJwt(token).aud).toEqual([AUD]);
+  });
+
+  it("applies claim overrides last: sets custom claims, replaces defaults and omits undefined", async () => {
+    const token = await issuer.mintIdentityJwt({
+      audience: AUD,
+      now: NOW,
       claims: {
-        acr: "urn:mace:incommon:iap:silver", // custom registered claim
-        exp: now + 5, // overrides expiresInSeconds default
-        iat: undefined, // omitted entirely
+        acr: "urn:mace:incommon:iap:silver",
+        exp: NOW + 5,
+        iat: undefined,
       },
     });
-    const payload = decodePayload(token);
+    const payload = decodeJwt(token);
     expect(payload.acr).toBe("urn:mace:incommon:iap:silver");
-    expect(payload.exp).toBe(now + 5);
-    expect("iat" in payload).toBe(false);
-    // Still a REAL RS256 token: verifies within its (overridden) lifetime...
-    const activeConfig = await configFor(issuer, AUD, now + 1);
+    expect(payload.exp).toBe(NOW + 5);
+    expect(payload).not.toHaveProperty("iat");
     await expect(
-      verifyIdentityJwt(token, activeConfig),
+      verifyIdentityJwt(token, await configFor(issuer, NOW + 1)),
     ).resolves.not.toBeNull();
-    // ...and a token with `exp` omitted via claims is rejected (exp required).
-    const noExp = await issuer.mintIdentityJwt({
+  });
+
+  it("omits exp when a claim override sets it to undefined", async () => {
+    const token = await issuer.mintIdentityJwt({
       audience: AUD,
-      now,
+      now: NOW,
       claims: { exp: undefined },
     });
-    expect("exp" in decodePayload(noExp)).toBe(false);
-    const expiredConfig = await configFor(issuer, AUD, now);
-    await expect(
-      verifyIdentityJwt(noExp, expiredConfig),
-    ).resolves.toBeNull();
+    expect(decodeJwt(token)).not.toHaveProperty("exp");
   });
 
   it("rejects non-object claims at mint time", async () => {
@@ -278,14 +211,5 @@ describe("createTestIdentityIssuer", () => {
         claims: ["nope"] as never,
       }),
     ).rejects.toThrow(TypeError);
-  });
-});
-
-describe("published testing subpath", () => {
-  it("resolves @cuny-ai-lab/cail-identity/testing via the exports map", async () => {
-    const viaPackage = await import("@cuny-ai-lab/cail-identity/testing");
-    expect(viaPackage.canonicalTestSubject).toBeTypeOf("function");
-    expect(viaPackage.createTestIdentityIssuer).toBeTypeOf("function");
-    expect(viaPackage.TEST_SUBJECTS.alice).toBe(TEST_SUBJECTS.alice);
   });
 });

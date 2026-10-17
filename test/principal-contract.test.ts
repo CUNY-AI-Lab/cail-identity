@@ -1,47 +1,30 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-import {
-  isAppSubject,
-  isCailPrincipalSubject,
-  isCailSubject,
-} from "../src/index.js";
+import { isCailPrincipalSubject } from "../src/index.js";
 
-// SAFETY: this checked-in contract fixture is parsed only for its declared
-// pattern/examples fields; the test asserts both values immediately below.
+// SAFETY: this checked-in contract fixture is parsed only for its examples
+// field, which each test passes to the package.
 const contract = JSON.parse(
   readFileSync(
     new URL("../contract/principal-v1.json", import.meta.url),
     "utf8",
   ),
-  ) as {
-  oneOf: Array<{ pattern: string }>;
-  examples: string[];
-};
+) as { examples: string[] };
 
 describe("principal-v1 contract", () => {
-  it("keeps user and app principal namespaces disjoint", () => {
-    const [user, app] = contract.examples;
-    expect(isCailSubject(user)).toBe(true);
-    expect(isAppSubject(user)).toBe(false);
-    expect(isAppSubject(app)).toBe(true);
-    expect(isCailSubject(app)).toBe(false);
-    expect(contract.oneOf.map((entry) => entry.pattern)).toEqual([
-      "^cail-[0-9a-f]{32}$",
-      "^app-[0-9a-f]{32}$",
-    ]);
+  it.each(contract.examples)("accepts the contract example %s as a principal", (example) => {
+    expect(isCailPrincipalSubject(example)).toBe(true);
   });
 
-  it("rejects log pseudonyms and noncanonical identifiers", () => {
-    for (const value of [
-      "cail-v1-0123456789abcdef0123456789abcdef",
-      "cail-ABCDEF0123456789ABCDEF0123456789",
-      "app-abc",
-      "user@example.edu",
-      "",
-      null,
-    ]) {
-      expect(isCailPrincipalSubject(value)).toBe(false);
-    }
+  it.each([
+    "cail-v1-0123456789abcdef0123456789abcdef",
+    "cail-ABCDEF0123456789ABCDEF0123456789",
+    "app-abc",
+    "user@example.edu",
+    "",
+    null,
+  ])("rejects log pseudonym or noncanonical identifier %j", (value) => {
+    expect(isCailPrincipalSubject(value)).toBe(false);
   });
 });

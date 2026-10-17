@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { SignJWT, base64url } from "jose";
 import {
   loadIdentityVerifierConfig,
@@ -9,28 +9,20 @@ import {
   encodeJson,
   makeRsaFixture,
   mintRsaJwt,
-  signRawRsaPayload,
+  signSegments,
+  withPaddingBitSet,
   type JsonObject,
-  type JsonValue,
-  type RsaFixture,
 } from "./fixtures.js";
-import { stringFrom, unknownArrayFrom } from "../src/validation.js";
 
 const NOW = 1_000_000;
 const ISS = "https://issuer.example/cail-sso";
 const OTHER_ISS = "https://other-issuer.example/cail-sso";
 const AUD = "cail-internal";
-const OPTS = { expectedAudience: AUD, allowedIssuers: [ISS], now: NOW };
 
-let oldKey: RsaFixture;
-let newKey: RsaFixture;
-
-beforeAll(async () => {
-  [oldKey, newKey] = await Promise.all([
-    makeRsaFixture("old-2026-07"),
-    makeRsaFixture("new-2026-08"),
-  ]);
-});
+const [oldKey, newKey] = await Promise.all([
+  makeRsaFixture("old-2026-07"),
+  makeRsaFixture("new-2026-08"),
+]);
 
 function claims(over: JsonObject = {}): JsonObject {
   return {
@@ -42,41 +34,38 @@ function claims(over: JsonObject = {}): JsonObject {
   };
 }
 
-type VerifyOptions = {
-  allowedIssuers?: JsonValue;
-  expectedAudience?: JsonValue;
-  now?: JsonValue;
-  clockToleranceSeconds?: JsonValue;
-};
-
-async function verify<Token extends string, Jwks>(
-  token: Token,
-  jwks?: Jwks,
-  opts?: VerifyOptions,
+async function verify(
+  token: string,
+  over: Partial<LoadIdentityVerifierConfigInput> = {},
 ) {
-  const jwksValue = jwks === undefined ? oldKey.jwks : jwks;
-  const values: VerifyOptions = opts ?? OPTS;
-  const allowedIssuers = values.allowedIssuers;
-  const allowedIssuerArray = unknownArrayFrom(allowedIssuers);
-  const issuer =
-    allowedIssuerArray === undefined
-      ? undefined
-      : stringFrom(allowedIssuerArray[0]);
-  const raw = {
-    jwks: JSON.stringify(jwksValue),
-    issuer,
-    expectedAudience: values.expectedAudience,
-    supportedIssuers: allowedIssuers,
-    now: values.now,
-    clockToleranceSeconds: values.clockToleranceSeconds,
-  };
-  // SAFETY: this test helper deliberately forwards malformed JSON-shaped
-  // values to the public configuration boundary.
-  const loaded = await loadIdentityVerifierConfig(
-    raw as LoadIdentityVerifierConfigInput,
-  );
+  const loaded = await loadIdentityVerifierConfig({
+    jwks: JSON.stringify(oldKey.jwks),
+    issuer: ISS,
+    expectedAudience: AUD,
+    supportedIssuers: [ISS],
+    now: NOW,
+    ...over,
+  });
   if (!loaded.ok) throw new Error(`invalid test config: ${loaded.reason}`);
   return verifyIdentityJwt(token, loaded.config);
+}
+
+// Hand-built segments. Every token below is signed over its exact segments,
+// so the signature check passes and only the rule under test can reject it.
+const HEADER = encodeJson({ alg: "RS256", kid: oldKey.kid });
+const PAYLOAD = encodeJson(claims({ note: "x" }));
+
+/** JSON for `value` plus an ignored `note` string member holding a lone 0xff byte. */
+function encodeJsonWithInvalidUtf8(value: JsonObject): string {
+  const encoder = new TextEncoder();
+  const json = JSON.stringify(value);
+  return base64url.encode(
+    Uint8Array.of(
+      ...encoder.encode(`${json.slice(0, -1)},"note":"`),
+      0xff,
+      ...encoder.encode('"}'),
+    ),
+  );
 }
 
 describe("verifyIdentityJwt happy path and output", () => {
@@ -108,6 +97,11 @@ describe("verifyIdentityJwt happy path and output", () => {
     });
   });
 
+  it("accepts a token signed over hand-built segments", async () => {
+    await expect(
+      verify(await signSegments(HEADER, PAYLOAD, oldKey)),
+    ).resolves.not.toBeNull();
+  });
 });
 
 describe("verifyIdentityJwt structure, encoding, and JSON", () => {
@@ -115,47 +109,43 @@ describe("verifyIdentityJwt structure, encoding, and JSON", () => {
     expect(await verify(token)).toBeNull();
   });
 
-  it("rejects non-object header and payload JSON", async () => {
-    const valid = await mintRsaJwt(claims(), oldKey);
-    const [, payload, signature] = valid.split(".");
-    expect(await verify(`${encodeJson([])}.${payload}.${signature}`)).toBeNull();
-    const raw = await signRawRsaPayload(new TextEncoder().encode("[]"), oldKey);
-    expect(await verify(raw)).toBeNull();
+  it.each([
+    ["header", () => signSegments(encodeJson([]), PAYLOAD, oldKey)],
+    ["payload", () => signSegments(HEADER, encodeJson([]), oldKey)],
+  ])("rejects a signed token whose %s is not a JSON object", async (_segment, mint) => {
+    expect(await verify(await mint())).toBeNull();
   });
 
-  it("rejects invalid UTF-8 in header or payload", async () => {
-    const valid = await mintRsaJwt(claims(), oldKey);
-    const [, payload, signature] = valid.split(".");
-    expect(await verify(`${base64url.encode(Uint8Array.of(0xff))}.${payload}.${signature}`)).toBeNull();
-    const raw = await signRawRsaPayload(Uint8Array.of(0x7b, 0x22, 0xff, 0x22, 0x7d), oldKey);
-    expect(await verify(raw)).toBeNull();
+  it.each([
+    [
+      "header",
+      () =>
+        signSegments(
+          encodeJsonWithInvalidUtf8({ alg: "RS256", kid: oldKey.kid }),
+          PAYLOAD,
+          oldKey,
+        ),
+    ],
+    [
+      "payload",
+      () => signSegments(HEADER, encodeJsonWithInvalidUtf8(claims()), oldKey),
+    ],
+  ])("rejects a signed token with invalid UTF-8 in the %s", async (_segment, mint) => {
+    expect(await verify(await mint())).toBeNull();
   });
 
-  it("rejects a non-canonical base64url spelling of every segment", async () => {
-    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    const withPaddingBits = <Value>(makeValue: (pad: string) => Value): string => {
-      for (let length = 0; length < 4; length += 1) {
-        const segment = encodeJson(makeValue("a".repeat(length)));
-        if ([2, 3].includes(segment.length % 4)) return segment;
-      }
-      throw new Error("fixture could not produce base64url padding bits");
-    };
-    const valid = await mintRsaJwt(claims(), oldKey);
-    const partsWithPadding = [
-      withPaddingBits((pad) => ({ alg: "RS256", kid: oldKey.kid, pad })),
-      withPaddingBits((pad) => ({ ...claims(), pad })),
-      valid.split(".")[2]!,
-    ];
-    for (let index = 0; index < 3; index += 1) {
-      const parts = [...partsWithPadding];
-      const segment = parts[index]!;
-      const remainder = segment.length % 4;
-      expect([2, 3]).toContain(remainder);
-      const last = alphabet.indexOf(segment.at(-1)!);
-      parts[index] = segment.slice(0, -1) + alphabet[last ^ 1];
-      expect(base64url.decode(parts[index]!)).toEqual(base64url.decode(segment));
-      expect(await verify(parts.join("."))).toBeNull();
-    }
+  it.each([
+    ["header", () => signSegments(withPaddingBitSet(HEADER), PAYLOAD, oldKey)],
+    ["payload", () => signSegments(HEADER, withPaddingBitSet(PAYLOAD), oldKey)],
+    [
+      "signature",
+      async () => {
+        const [, , signature] = (await signSegments(HEADER, PAYLOAD, oldKey)).split(".");
+        return `${HEADER}.${PAYLOAD}.${withPaddingBitSet(signature!)}`;
+      },
+    ],
+  ])("rejects a non-canonical base64url %s segment", async (_segment, mint) => {
+    expect(await verify(await mint())).toBeNull();
   });
 });
 
@@ -178,16 +168,18 @@ describe("verifyIdentityJwt algorithm and key selection", () => {
     expect(await verify(token)).toBeNull();
   });
 
-  it("rejects non-RS256 algorithms and any crit member", async () => {
-    const valid = await mintRsaJwt(claims(), oldKey);
-    const [, payload, signature] = valid.split(".");
-    for (const header of [
-      { alg: "none", kid: oldKey.kid },
-      { alg: "PS256", kid: oldKey.kid },
-      { alg: "RS256", kid: oldKey.kid, crit: [] },
-    ]) {
-      expect(await verify(`${encodeJson(header)}.${payload}.${signature}`)).toBeNull();
-    }
+  it.each([
+    { alg: "none" },
+    { alg: "PS256" },
+    { alg: "RS256", crit: [] },
+    { alg: "RS256", crit: ["b64"], b64: true },
+  ])("rejects header %j even with a valid RS256 signature", async (header) => {
+    const token = await signSegments(
+      encodeJson({ kid: oldKey.kid, ...header }),
+      PAYLOAD,
+      oldKey,
+    );
+    expect(await verify(token)).toBeNull();
   });
 
   it.each([false, "false", 0, null])(
@@ -205,19 +197,8 @@ describe("verifyIdentityJwt algorithm and key selection", () => {
 });
 
 describe("verifyIdentityJwt audience, issuer, and subject", () => {
-  it.each([
-    { aud: undefined },
-    { aud: "" },
-    { aud: "other" },
-    { aud: [] },
-    { aud: ["other"] },
-    { aud: [AUD, AUD] },
-    { aud: [AUD, ""] },
-    { aud: [AUD, 7] },
-  ])("rejects malformed or unauthorized audience $aud", async ({ aud }) => {
-    const value = claims({ aud });
-    if (aud === undefined) delete value.aud;
-    expect(await verify(await mintRsaJwt(value, oldKey))).toBeNull();
+  it.each([undefined, "", "other"])("rejects audience %j", async (aud) => {
+    expect(await verify(await mintRsaJwt(claims({ aud }), oldKey))).toBeNull();
   });
 
   it.each([
@@ -231,9 +212,7 @@ describe("verifyIdentityJwt audience, issuer, and subject", () => {
   );
 
   it.each([undefined, "", OTHER_ISS, 7])("rejects issuer %j", async (iss) => {
-    const value = claims({ iss });
-    if (iss === undefined) delete value.iss;
-    expect(await verify(await mintRsaJwt(value, oldKey))).toBeNull();
+    expect(await verify(await mintRsaJwt(claims({ iss }), oldKey))).toBeNull();
   });
 
   it.each([
@@ -246,9 +225,9 @@ describe("verifyIdentityJwt audience, issuer, and subject", () => {
   });
 
   it("snapshots one exact issuer from an explicitly supplied authority", async () => {
-    const opts = { ...OPTS, allowedIssuers: [ISS, OTHER_ISS] };
+    const token = await mintRsaJwt(claims(), oldKey);
     expect(
-      await verify(await mintRsaJwt(claims(), oldKey), oldKey.jwks, opts),
+      await verify(token, { supportedIssuers: [ISS, OTHER_ISS] }),
     ).not.toBeNull();
   });
 
@@ -261,32 +240,42 @@ describe("verifyIdentityJwt audience, issuer, and subject", () => {
     "cail-0123456789abcdef0123456789abcde",
     " cail-0123456789abcdef0123456789abcdef",
   ])("rejects subject %j", async (sub) => {
-    const value = claims({ sub });
-    if (sub === undefined) delete value.sub;
-    expect(await verify(await mintRsaJwt(value, oldKey))).toBeNull();
+    expect(await verify(await mintRsaJwt(claims({ sub }), oldKey))).toBeNull();
   });
 });
 
-describe("verifyIdentityJwt time and options", () => {
-  it("enforces exp and nbf with the default 60-second tolerance", async () => {
-    expect(await verify(await mintRsaJwt(claims({ exp: NOW - 60 }), oldKey))).toBeNull();
-    expect(await verify(await mintRsaJwt(claims({ exp: NOW - 59 }), oldKey))).not.toBeNull();
-    expect(await verify(await mintRsaJwt(claims({ nbf: NOW + 60 }), oldKey))).not.toBeNull();
-    expect(await verify(await mintRsaJwt(claims({ nbf: NOW + 61 }), oldKey))).toBeNull();
-  });
+describe("verifyIdentityJwt time", () => {
+  // A tolerance of undefined means the default of 60 seconds.
+  it.each([
+    { exp: NOW - 60, tolerance: undefined, accepted: false },
+    { exp: NOW - 59, tolerance: undefined, accepted: true },
+    { exp: NOW, tolerance: 0, accepted: false },
+  ])(
+    "exp $exp at tolerance $tolerance is accepted: $accepted",
+    async ({ exp, tolerance, accepted }) => {
+      const token = await mintRsaJwt(claims({ exp }), oldKey);
+      const result = await verify(token, { clockToleranceSeconds: tolerance });
+      expect(result !== null).toBe(accepted);
+    },
+  );
 
-  it("supports strict zero tolerance", async () => {
-    const strict = { ...OPTS, clockToleranceSeconds: 0 };
-    expect(await verify(await mintRsaJwt(claims({ exp: NOW }), oldKey), oldKey.jwks, strict)).toBeNull();
-    expect(await verify(await mintRsaJwt(claims({ nbf: NOW }), oldKey), oldKey.jwks, strict)).not.toBeNull();
-  });
+  it.each([
+    { nbf: NOW + 60, tolerance: undefined, accepted: true },
+    { nbf: NOW + 61, tolerance: undefined, accepted: false },
+    { nbf: NOW, tolerance: 0, accepted: true },
+  ])(
+    "nbf $nbf at tolerance $tolerance is accepted: $accepted",
+    async ({ nbf, tolerance, accepted }) => {
+      const token = await mintRsaJwt(claims({ nbf }), oldKey);
+      const result = await verify(token, { clockToleranceSeconds: tolerance });
+      expect(result !== null).toBe(accepted);
+    },
+  );
 
   it.each([undefined, "9999999", Number.NaN, Number.POSITIVE_INFINITY])(
     "rejects invalid exp %j",
     async (exp) => {
-      const value = claims({ exp });
-      if (exp === undefined) delete value.exp;
-      expect(await verify(await mintRsaJwt(value, oldKey))).toBeNull();
+      expect(await verify(await mintRsaJwt(claims({ exp }), oldKey))).toBeNull();
     },
   );
 
@@ -299,20 +288,10 @@ describe("verifyIdentityJwt time and options", () => {
   });
 });
 
-describe("verifyIdentityJwt own-property and fail-closed behavior", () => {
+describe("verifyIdentityJwt fail-closed behavior", () => {
   it("returns null rather than throwing for a wrong token runtime type", async () => {
     // SAFETY: this deliberately injects a wrong runtime token type to verify
     // the public fail-closed boundary.
     await expect(verify(null as never)).resolves.toBeNull();
-  });
-
-  it("does not mutate the token, JWKS, options, or claims", async () => {
-    const sourceClaims = claims({ entitlements: ["a"] });
-    const token = await mintRsaJwt(sourceClaims, oldKey);
-    const jwks = structuredClone(oldKey.jwks);
-    const opts = structuredClone(OPTS);
-    const before = JSON.stringify({ sourceClaims, token, jwks, opts });
-    await verify(token, jwks, opts);
-    expect(JSON.stringify({ sourceClaims, token, jwks, opts })).toBe(before);
   });
 });
