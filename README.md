@@ -1,7 +1,7 @@
 # `@cuny-ai-lab/cail-identity`
 
 The shared stable-subject and signed-identity contract for CAIL applications.
-It runs on Web Crypto in Cloudflare Workers, browsers, Bun, and Node 20 or
+It runs on Web Crypto in Cloudflare Workers, browsers, Bun, and Node 22 or
 newer.
 
 The package has two deliberately separate jobs:
@@ -386,7 +386,7 @@ an actual packed tarball installed in a disposable consumer with lifecycle
 scripts disabled. The consumer exercises public runtime and testing exports,
 packaged JSON and Lua contracts, subject derivation, and valid and wrong-audience
 JWTs, then typechecks those imports against installed declarations. CI runs the
-consumer on Node 20; lint uses Bun to load the TypeScript Oxlint configuration.
+consumer on Node 22; lint uses Bun to load the TypeScript Oxlint configuration.
 Resolve lint findings at the parsing or contract
 boundary; do not suppress them, hide them behind generic wrappers, or add a
 `SAFETY` comment unless it names the runtime invariant established immediately
