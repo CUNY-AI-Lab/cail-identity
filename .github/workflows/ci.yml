@@ -24,8 +24,8 @@ jobs:
         with:
           node-version: 22
 
-      - name: Install LuaJIT for cross-language identity vectors
-        run: sudo apt-get update && sudo apt-get install --yes luajit
+      - name: Install pinned LuaJIT for cross-language identity vectors
+        run: scripts/install-luajit.sh
 
       - name: Install
         run: bun install --frozen-lockfile --ignore-scripts
